@@ -1,0 +1,147 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --color-destructive-foreground: var(--destructive-foreground);
+
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  /* Charts */
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+}
+
+:root {
+  /* Black Obsidian Theme Palette */
+  --radius: 0.75rem;
+
+  /* Pure Black Obsidian Backgrounds */
+  --background: #000000;
+  --foreground: #f0f0f0;
+
+  /* Glassy Cards — black tinted glass */
+  --card: rgba(10, 10, 10, 0.7);
+  --card-foreground: #f0f0f0;
+
+  --popover: #0a0a0a;
+  --popover-foreground: #f0f0f0;
+
+  /* Vibrant Cyan Primary */
+  --primary: #00d4ff;
+  --primary-foreground: #000000;
+
+  /* Secondary/Muted — neutral grays, not blue */
+  --secondary: #161616;
+  --secondary-foreground: #a0a0a0;
+
+  --muted: #0a0a0a;
+  --muted-foreground: #666666;
+
+  --accent: #161616;
+  --accent-foreground: #00d4ff;
+
+  --destructive: #ef4444;
+  --destructive-foreground: #f0f0f0;
+
+  --border: rgba(255, 255, 255, 0.08);
+  --input: rgba(255, 255, 255, 0.08);
+  --ring: rgba(0, 212, 255, 0.5);
+
+  /* Chart Colors */
+  --chart-1: #00d4ff;
+  --chart-2: #00ff9d;
+  --chart-3: #ff6b35;
+  --chart-4: #facc15;
+  --chart-5: #a855f7;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  body {
+    background-color: var(--background);
+    color: var(--foreground);
+    background-image:
+      radial-gradient(circle at 15% 50%, rgba(0, 212, 255, 0.03), transparent 25%),
+      radial-gradient(circle at 85% 30%, rgba(0, 255, 157, 0.03), transparent 25%);
+    background-attachment: fixed;
+  }
+}
+
+/* Custom Utilities */
+.glass-dark {
+  background: rgba(0, 0, 0, 0.75);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.glass-card {
+  background: rgba(10, 10, 10, 0.5);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.3);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 163, 184, 0.2);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 212, 255, 0.4);
+}
+
+/* Glow Utilities */
+.glow-cyan-sm {
+  box-shadow: 0 0 15px rgba(0, 212, 255, 0.15);
+}
+
+.glow-cyan {
+  box-shadow: 0 0 30px rgba(0, 212, 255, 0.25);
+}
+
+/* Animations */
+@keyframes blink {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.blink {
+  animation: blink 2s ease-in-out infinite;
+}
+
+/* Hide Next.js Portal */
+nextjs-portal {
+  display: none !important;
+}
