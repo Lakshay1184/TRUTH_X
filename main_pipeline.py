@@ -421,13 +421,18 @@ class DeepfakeDetectionPipeline:
             logger.error("Failed to load model %s: %s", model_name, e)
             self.models[model_name] = None
 
-    def process(self, video_path: str | None = None, query: str | None = None) -> Dict[str, Any]:
+    def process(self, video_path: str | None = None, query: str | None = None, status_callback: Optional[callable] = None) -> Dict[str, Any]:
         """
         Main entry point for processing.
         Returns a dictionary containing the full analysis report.
         """
+        def _set_status(msg: str):
+            if status_callback:
+                status_callback(msg)
+            logger.info(msg)
+
         t_start_total = time.perf_counter()
-        
+        _set_status("Initializing analysis...")
         metadata = {}
         video_result = None
         audio_result = None
@@ -440,22 +445,26 @@ class DeepfakeDetectionPipeline:
         if video_path and os.path.exists(video_path):
             try:
                 # 1. Extract metadata
+                _set_status("Extracting metadata fingerprints...")
                 t0 = time.perf_counter()
                 metadata = extract_video_metadata(video_path, self.ffprobe_path)
                 logger.info("Metadata extraction %.2fs", time.perf_counter() - t0)
 
                 # 2. Video Deepfake Detection
+                _set_status("Running deepfake detection model...")
                 self.load_model("video")
                 if self.models.get("video"):
-                    t0 = time.perf_counter()
+                    t_vid = time.perf_counter()
                     try:
-                        from utils.preprocessing import extract_frames
+                        from utils.preprocessing import extract_frames, detect_and_crop_faces
                         frame_rate = self.config.get("video", {}).get("frame_sample_rate", 1)
                         frames = extract_frames(video_path, target_fps=frame_rate)
-                        if frames:
+                        
+                        if frames and len(frames) > 0:
+                            frames = detect_and_crop_faces(frames)
                             video_result = self.models["video"].predict(frames)
-                            elapsed = time.perf_counter() - t0
-                            logger.info("Deepfake detection: %s (%.2fs)", video_result.get("label"), elapsed)
+                            elapsed_vid = time.perf_counter() - t_vid
+                            logger.info("Deepfake detection: %s (%.2fs)", video_result.get("label"), elapsed_vid)
                             
                             det_label = video_result.get("label", "unknown")
                             det_conf = video_result.get("confidence", 0)
@@ -464,10 +473,13 @@ class DeepfakeDetectionPipeline:
                                 "score": int(det_conf * 100),
                                 "label": det_label.capitalize(),
                             })
+                        else:
+                            logger.error("No frames extracted from video - skipping vision model.")
                     except Exception as e:
                         logger.error("Deepfake detection failed: %s", e)
 
                 # 3. Audio Detection
+                _set_status("Analyzing audio frequency anomalies...")
                 self.load_model("audio")
                 if self.models.get("audio"):
                     try:
@@ -493,6 +505,7 @@ class DeepfakeDetectionPipeline:
         # ── Text Processing ─────────────────────────────────────────────────
         if query and query.strip():
             # Text Detection
+            _set_status("Analyzing text patterns...")
             self.load_model("text")
             if self.models.get("text"):
                 t0 = time.perf_counter()
@@ -506,6 +519,7 @@ class DeepfakeDetectionPipeline:
                     logger.error("Text detection failed: %s", e)
 
             # Fact Check (FAISS)
+            _set_status("Cross-referencing content database...")
             self.load_model("faiss")
             if self.models.get("faiss"):
                 t0 = time.perf_counter()
@@ -560,8 +574,8 @@ class DeepfakeDetectionPipeline:
             "audio_result": base_report.get("audio"),
             "text_result": base_report.get("text"),
             "related_articles": base_report.get("related_articles"),
-            "combined_fake_probability": base_report.get("combined_fake_probability"),
-            "overall_label": base_report.get("overall_label"),
+            "combined_fake_probability": base_report.get("combined_fake_probability", 0.5),
+            "overall_label": base_report.get("overall_label", "uncertain"),
         }
 
         return full_report

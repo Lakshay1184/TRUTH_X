@@ -8,3 +8,11 @@ logs/
 hf_cache/
 ffmpeg/
 data/samples/
+node_modules
+*.log
+out.txt
+venv_new/
+reproduce_500.py
+vapid.json
+backend_debug.log
+logs/pipeline.log

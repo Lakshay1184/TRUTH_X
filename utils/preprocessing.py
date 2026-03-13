@@ -6,125 +6,139 @@ import cv2
 import torch
 import numpy as np
 from PIL import Image
-from facenet_pytorch import MTCNN
 
 from utils.logger import logger
 
 
 def extract_frames(video_path: str, target_fps: float = 1.0) -> List[Image.Image]:
     """Sample frames from a video at *target_fps* frames per second.
-
-    Returns a list of PIL RGB Images.
+    Tries OpenCV first, then falls back to FFmpeg for better codec support.
     """
     if not os.path.isfile(video_path):
         raise FileNotFoundError(f"Video not found: {video_path}")
 
-    # Resolve local or system ffmpeg path just in case we need it, though cv2 handles reading.
-    # But extract_audio below definitely needs it.
+    # ── Try OpenCV ──────────────────────────────────────────────────
+    try:
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            raise RuntimeError("OpenCV failed to open video")
 
+        native_fps = cap.get(cv2.CAP_PROP_FPS)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if native_fps <= 0:
+            raise RuntimeError("OpenCV reported non-positive FPS")
 
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        raise RuntimeError(f"Failed to open video: {video_path}")
+        frame_interval = max(1, int(round(native_fps / target_fps)))
+        logger.info("Extracting frames (OpenCV): %s (fps=%.2f, total=%d, interval=%d)",
+                    os.path.basename(video_path), native_fps, total_frames, frame_interval)
 
-    native_fps = cap.get(cv2.CAP_PROP_FPS)
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    if native_fps <= 0:
+        frames: List[Image.Image] = []
+        frame_idx = 0
+        while True:
+            ret, frame = cap.read()
+            if not ret: break
+            if frame_idx % frame_interval == 0:
+                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frames.append(Image.fromarray(rgb))
+            frame_idx += 1
         cap.release()
-        raise RuntimeError(f"Could not determine FPS for: {video_path}")
 
-    frame_interval = max(1, int(round(native_fps / target_fps)))
-    logger.info(
-        "Extracting frames from %s (fps=%.2f, total=%d, interval=%d)",
-        video_path, native_fps, total_frames, frame_interval,
-    )
-    print(f"  Extracting frames from {os.path.basename(video_path)}...", end="", flush=True)
+        if len(frames) > 0:
+            logger.info("Extracted %d frames using OpenCV", len(frames))
+            return frames
+    except Exception as e:
+        logger.warning("OpenCV frame extraction failed or returned 0 frames: %s", e)
 
-    frames: List[Image.Image] = []
-    frame_idx = 0
+    # ── Fallback to FFmpeg ───────────────────────────────────────────
+    logger.info("Falling back to FFmpeg for frame extraction...")
+    return extract_frames_ffmpeg(video_path, target_fps)
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        if frame_idx % frame_interval == 0:
-            rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frames.append(Image.fromarray(rgb))
-        frame_idx += 1
 
-    cap.release()
-    cap.release()
-    logger.info("Extracted %d frames from %s", len(frames), video_path)
-    print(f" done ({len(frames)} frames).")
-    return frames
+def extract_frames_ffmpeg(video_path: str, target_fps: float = 1.0) -> List[Image.Image]:
+    """Extract frames using a raw FFmpeg subprocess for maximum compatibility."""
+    import tempfile
+    import shutil
+    
+    ffmpeg_exe = _find_ffmpeg()
+    temp_dir = tempfile.mkdtemp(prefix="truthx_frames_")
+    
+    try:
+        # Use ffmpeg to save frames as images to disk
+        # -q:v 2 is high quality JPEG
+        out_pattern = os.path.join(temp_dir, "frame_%04d.jpg")
+        cmd = [
+            ffmpeg_exe, "-y",
+            "-i", video_path,
+            "-vf", f"fps={target_fps}",
+            "-q:v", "2",
+            out_pattern
+        ]
+        
+        logger.info("Running FFmpeg: %s", " ".join(cmd))
+        subprocess.run(cmd, capture_output=True, check=True)
+        
+        # Load images from disk
+        files = sorted([f for f in os.listdir(temp_dir) if f.endswith(".jpg")])
+        frames = []
+        for f in files:
+            img_path = os.path.join(temp_dir, f)
+            with Image.open(img_path) as img:
+                frames.append(img.convert("RGB"))
+        
+        logger.info("Extracted %d frames using FFmpeg fallback", len(frames))
+        return frames
+    except Exception as e:
+        logger.error("FFmpeg frame extraction totally failed: %s", e)
+        return []
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def detect_and_crop_faces(frames: List[Image.Image]) -> List[Image.Image]:
-    """Detect faces in frames using MTCNN and return cropped face images.
-
-    If no face is detected in a frame, the entire frame is used (fallback).
+    """Detect faces in frames using OpenCV Haar cascades and return cropped images.
+    If no face is detected, returns the original frame.
     """
     if not frames:
         return []
 
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    logger.info("Initializing MTCNN for face detection on %s", device)
+    logger.info("Initializing OpenCV Haar Cascade for face detection")
     print(f"  Running Face Detection on {len(frames)} frames...", end="", flush=True)
+
+    # Use OpenCV's built-in Haar cascade path
+    cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+    face_cascade = cv2.CascadeClassifier(cascade_path)
     
-    try:
-        mtcnn = MTCNN(keep_all=True, device=device, post_process=False).eval()
-        faces_found = 0
-        cropped_images = []
+    faces_found = 0
+    cropped_images = []
 
-        # Process in batches to avoid OOM if many frames
-        batch_size = 32
-        for i in range(0, len(frames), batch_size):
-            batch = frames[i : i + batch_size]
-            
-            # MTCNN can take a list of PIL images
-            # boxes_list: list of (N_faces, 4) arrays or None
-            try:
-                boxes_list, _ = mtcnn.detect(batch)
-            except Exception as e:
-                logger.warning("MTCNN batch detection failed: %s. Using original frames.", e)
-                cropped_images.extend(batch)
-                continue
+    for frame in frames:
+        # Convert PIL to OpenCV BGR
+        open_cv_image = np.array(frame)
+        if len(open_cv_image.shape) == 3 and open_cv_image.shape[2] == 3:
+            # Note: frame is usually RGB
+            open_cv_image = open_cv_image[:, :, ::-1].copy()
 
-            for frame, boxes in zip(batch, boxes_list):
-                if boxes is not None and len(boxes) > 0:
-                    # Crop the largest face (or all? Implementation Plan said focus on faces)
-                    # Let's crop the largest face to be safe (most prominent subject)
-                    # Box format: [x1, y1, x2, y2]
-                    
-                    # Find largest box area
-                    best_box = max(boxes, key=lambda b: (b[2]-b[0]) * (b[3]-b[1]))
-                    x1, y1, x2, y2 = map(int, best_box)
-                    
-                    # Add margin? (Optional, maybe 10%)
-                    w, h = frame.size
-                    x1 = max(0, x1); y1 = max(0, y1)
-                    x2 = min(w, x2); y2 = min(h, y2)
-                    
-                    if x2 > x1 and y2 > y1:
-                        face_crop = frame.crop((x1, y1, x2, y2))
-                        cropped_images.append(face_crop)
-                        faces_found += 1
-                    else:
-                        cropped_images.append(frame)
-                else:
-                    # No face detected, keep original frame context
-                    cropped_images.append(frame)
+        gray = cv2.cvtColor(open_cv_image, cv2.COLOR_BGR2GRAY)
+        
+        # Detect faces
+        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(30, 30))
 
-        logger.info("Face detection complete: found faces in %d/%d frames", faces_found, len(frames))
-        print(f" done ({faces_found} faces found).")
-        return cropped_images
+        if len(faces) > 0:
+            # Optional: find largest face
+            largest_face = max(faces, key=lambda f: f[2] * f[3])
+            x, y, w, h = largest_face
 
-    except Exception as e:
-        logger.error("Face detection initialization or runtime failed: %s", e)
-        return frames  # Fallback to full frames
+            # Crop face from original PIL image
+            face_crop = frame.crop((x, y, x + w, y + h))
+            cropped_images.append(face_crop)
+            faces_found += 1
+        else:
+            cropped_images.append(frame)
 
-
-        return frames  # Fallback to full frames
+    logger.info("Face detection complete: found faces in %d/%d frames", faces_found, len(frames))
+    print(f" done ({faces_found} faces found).")
+    
+    return cropped_images
 
 
 def _find_ffmpeg() -> str:
