@@ -1,18 +1,41 @@
+# ─── Python ──────────────────────────────
 venv/
+venv_new/
 __pycache__/
 *.pyc
+*.pyo
+*.egg-info/
+.eggs/
+
+# ─── Backend ─────────────────────────────
+backend/.env
+backend/logs/
 data/processed/
-logs/
-*.bin
-.env
-hf_cache/
-ffmpeg/
 data/samples/
-node_modules
+logs/
 *.log
-out.txt
-venv_new/
-reproduce_500.py
-vapid.json
-backend_debug.log
-logs/pipeline.log
+*.bin
+
+# ─── ML / HuggingFace ───────────────────
+hf_cache/
+*.pt
+*.pth
+*.onnx
+
+# ─── FFmpeg ──────────────────────────────
+ffmpeg/
+
+# ─── Node / Next.js ─────────────────────
+node_modules/
+.next/
+out/
+
+# ─── IDE ─────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ─── OS ──────────────────────────────────
+.DS_Store
+Thumbs.db

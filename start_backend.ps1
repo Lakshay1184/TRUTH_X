@@ -1,25 +1,29 @@
-# start_backend.ps1
-Write-Host "Initializing Truth X Backend..." -ForegroundColor Cyan
+# start_backend.ps1 — truth.x Backend Launcher
+Write-Host "═══════════════════════════════════════" -ForegroundColor Cyan
+Write-Host "  truth.x Backend Server" -ForegroundColor Cyan
+Write-Host "═══════════════════════════════════════" -ForegroundColor Cyan
 
-# Delete old broken venv
-if (Test-Path "venv") {
-    Write-Host "Removing old virtual environment..." -ForegroundColor Yellow
-    Remove-Item -Recurse -Force "venv"
+# Activate venv if present
+if (Test-Path "venv\Scripts\Activate.ps1") {
+    Write-Host "`n→ Activating virtual environment..." -ForegroundColor Yellow
+    .\venv\Scripts\Activate.ps1
+} elseif (Test-Path "venv_new\Scripts\Activate.ps1") {
+    Write-Host "`n→ Activating virtual environment (venv_new)..." -ForegroundColor Yellow
+    .\venv_new\Scripts\Activate.ps1
+} else {
+    Write-Host "`n⚠ No venv found — using system Python" -ForegroundColor Yellow
 }
 
-# Create fresh venv
-Write-Host "Creating virtual environment..." -ForegroundColor Yellow
-python -m venv venv
+# Install core deps if missing
+Write-Host "→ Checking dependencies..." -ForegroundColor Yellow
+pip install --quiet fastapi uvicorn python-multipart pyyaml python-dotenv httpx 2>$null
 
-# Activate
-Write-Host "Activating..." -ForegroundColor Yellow
-.\venv\Scripts\Activate.ps1
+# Create data directories
+New-Item -ItemType Directory -Force -Path "data\processed" | Out-Null
 
-# Install (no C++ needed now)
-Write-Host "Installing dependencies..." -ForegroundColor Yellow
-pip install --quiet fastapi uvicorn python-multipart pyyaml python-dotenv httpx
-
-# Start
+# Start server
 Write-Host ""
-Write-Host "Starting server on http://localhost:8000 ..." -ForegroundColor Green
+Write-Host "→ Starting server on http://localhost:8000" -ForegroundColor Green
+Write-Host "  Press Ctrl+C to stop" -ForegroundColor DarkGray
+Write-Host ""
 python -m uvicorn backend.api:app --host 0.0.0.0 --port 8000 --reload

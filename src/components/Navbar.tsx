@@ -7,6 +7,8 @@ import { useAuth } from "@/context/AuthContext";
 import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
+import InstallPrompt from "@/components/InstallPrompt";
+
 const navLinks = [
     { name: "Live Detection", href: "/live", icon: Zap, color: "#ff4444" },
     { name: "History", href: "/history", icon: History, color: "#00d4ff" },
@@ -98,6 +100,7 @@ export default function Navbar() {
 
                     {/* Auth & Mobile Toggle */}
                     <div className="flex items-center gap-4">
+                        <InstallPrompt />
                         {user ? (
                             <div className="flex items-center gap-4">
                                 <div className="hidden sm:flex flex-col items-end">

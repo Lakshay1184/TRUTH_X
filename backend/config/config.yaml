@@ -1,0 +1,91 @@
+# ─────────────────────────────────────────────────────────
+# truth.x — Configuration
+# Production-grade multimodal detection platform
+# ─────────────────────────────────────────────────────────
+
+device: auto  # auto | cuda | cpu
+
+# ── Temporary files ──────────────────────────────────────
+temp_dir: data/processed
+
+# ── Video Deepfake Detection ─────────────────────────────
+video:
+  model_name: MCG-NJU/videomae-base  # Changed to temporal backbone
+  batch_size: 1  # 1 clip at a time (16 frames)
+  max_frames: 64
+  min_frames: 16
+  frame_sample_rate: 1
+  scene_change_threshold: 30.0
+  face_detection: true
+  face_quality_threshold: 100.0
+  mc_dropout_passes: 5
+  temporal_weight: 0.60
+  # Ensemble weights for video detection
+  weight_temporal_transformer: 0.60
+  weight_landmarks: 0.20
+  weight_metadata: 0.20
+  videomae_model: MCG-NJU/videomae-base
+
+# ── Image AI Detection ───────────────────────────────────
+image:
+  clip_model: openai/clip-vit-base-patch32
+  weight_vit: 0.45
+  weight_clip: 0.25
+  weight_artifact: 0.30
+
+# ── Audio Detection ──────────────────────────────────────
+audio:
+  model_name: MelodyMachine/Deepfake-audio-detection-V2
+  segment_duration: 5.0
+  sample_rate: 16000
+  max_segments: 10
+  batch_size: 4
+
+# ── Text AI Detection ───────────────────────────────────
+text:
+  model_name: desklib/ai-text-detector-v1.01
+  max_length: 768
+  threshold: 0.5
+  # Enhanced analysis ensemble weights
+  weight_deberta: 0.50
+  weight_perplexity: 0.20
+  weight_burstiness: 0.15
+  weight_stylometric: 0.15
+  # Perplexity model (HF API)
+  perplexity_model: openai-community/gpt2
+
+# ── RAG Fake News Verification ───────────────────────────
+rag:
+  nli_model: facebook/bart-large-mnli
+  top_k: 5
+  min_similarity: 0.3
+
+# ── FAISS Retrieval ──────────────────────────────────────
+retrieval:
+  embedding_model: sentence-transformers/all-MiniLM-L6-v2
+  top_k: 5
+  articles_path: data/articles.json
+  faiss_index_path: data/faiss/articles.index
+  metadata_path: data/faiss_metadata.pkl
+
+# ── Aggregation & Scoring ────────────────────────────────
+aggregation:
+  video_weight: 0.45
+  audio_weight: 0.30
+  text_weight: 0.25
+
+# ── HuggingFace Inference API ────────────────────────────
+hf_api:
+  timeout: 60
+  max_retries: 3
+  cache_ttl: 300
+  cache_max_size: 100
+
+# ── Credibility Scoring ─────────────────────────────────
+credibility:
+  weights:
+    video: 0.30
+    audio: 0.10
+    image: 0.15
+    text: 0.15
+    news: 0.30

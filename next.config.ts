@@ -5,6 +5,14 @@ import path from "node:path";
 const loaderPath = require.resolve('orchids-visual-edits/loader.js');
 
 const nextConfig: NextConfig = {
+  async rewrites() {
+    return [
+      {
+        source: "/py-api/:path*",
+        destination: "http://127.0.0.1:8000/:path*",
+      },
+    ];
+  },
   images: {
     remotePatterns: [
       {
@@ -30,7 +38,12 @@ const nextConfig: NextConfig = {
         loaders: [loaderPath]
       }
     }
-  }
+  },
+  experimental: {
+    serverActions: {
+      bodySizeLimit: '100mb',
+    },
+  },
 } as NextConfig;
 
 export default nextConfig;

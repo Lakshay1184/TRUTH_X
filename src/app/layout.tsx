@@ -3,6 +3,7 @@ import { Inter } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/context/AuthContext";
 import AgentScene from "@/components/AgentScene";
+import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
 import Navbar from "@/components/Navbar";
 import Sidebar from "@/components/Sidebar";
 
@@ -22,6 +23,7 @@ export default function RootLayout({
     <html lang="en">
       <body className={`${inter.className} min-h-screen bg-black text-white selection:bg-cyan-500/30 overflow-x-hidden`}>
         <AuthProvider>
+          <ServiceWorkerRegister />
           <AgentScene />
           <Navbar />
           <div className="flex min-h-screen">
