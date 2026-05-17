@@ -5,7 +5,6 @@ Explainability routes for Truth_X.
 from typing import Dict, Any
 from fastapi import APIRouter
 from pydantic import BaseModel
-from backend.explainability.mistral_reasoner import MistralReasoner
 
 router = APIRouter(prefix="/explainability", tags=["explainability"])
 
@@ -49,6 +48,7 @@ async def explainability_key_findings(request: KeyFindingsRequest) -> Dict[str, 
         "provenance": analysis.get("credibility", {}).get("provenance", {}),
     }
 
+    from backend.explainability.mistral_reasoner import MistralReasoner
     reasoner = MistralReasoner()
     findings = reasoner.generate_key_findings(signals)
 

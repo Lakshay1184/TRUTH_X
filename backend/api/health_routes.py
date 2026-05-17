@@ -10,8 +10,14 @@ import os
 router = APIRouter(tags=["health"])
 
 @router.get("/health")
-async def health() -> Dict[str, str]:
-    return {"status": "ok", "version": "2.0.0"}
+async def health() -> Dict[str, Any]:
+    import os
+    return {
+        "status": "ok",
+        "version": "2.0.0",
+        "port": os.environ.get("PORT", "10000"),
+        "deployment": "render" if "RENDER" in os.environ else "local"
+    }
 
 @router.get("/favicon.ico", include_in_schema=False)
 async def favicon():

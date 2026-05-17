@@ -114,7 +114,7 @@ async def analyze(
     if modality == "text" and (not query or not query.strip()):
         raise HTTPException(400, "Text analysis requires non-empty text or a supported text file.")
 
-    job_id = shared._job_manager.create_job()
+    job_id = shared.get_job_manager().create_job()
 
     thread = threading.Thread(
         target=_run_analysis_job,

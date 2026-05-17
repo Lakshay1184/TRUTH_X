@@ -5,24 +5,28 @@ Shared state and utilities for Truth_X API.
 from __future__ import annotations
 
 import os
-import re
-import httpx
-from typing import Optional, Literal
+from typing import Optional, Literal, TYPE_CHECKING
 from backend.utils.logger import logger
-from backend.utils.env_loader import ensure_backend_environment_loaded, log_runtime_env_status
-from backend.workers.job_manager import JobManager
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from backend.pipelines.main_pipeline import DeepfakeDetectionPipeline
+    from backend.workers.job_manager import JobManager
 
 AnalysisModality = Literal["text", "image", "audio", "video"]
 
-# Global State
-_pipeline: Optional['DeepfakeDetectionPipeline'] = None
-_job_manager = JobManager()
+# Global State (Initialized on demand)
+_pipeline = None
+_job_manager = None
 
-def get_pipeline() -> 'DeepfakeDetectionPipeline':
+def get_job_manager() -> 'JobManager':
+    """Lazy-load the job manager."""
+    global _job_manager
+    if _job_manager is None:
+        from backend.workers.job_manager import JobManager
+        _job_manager = JobManager()
+    return _job_manager
+
+def get_pipeline():
     """Lazy-load the main pipeline."""
     global _pipeline
     if _pipeline is None:
@@ -34,7 +38,6 @@ def get_pipeline() -> 'DeepfakeDetectionPipeline':
 async def _log_to_supabase(table: str, data: dict) -> None:
     """
     Log analysis data to Supabase using history_service.
-    Maintains compatibility with existing code while fixing the underlying issue.
     """
     try:
         from backend.services.history_service import save_history_entry

@@ -2,37 +2,40 @@ from __future__ import annotations
 
 """
 Truth_X — FastAPI server main entrypoint.
-Modularized architecture.
+Optimized for immediate port binding on Render.
 """
 
-print(">>> BACKEND STARTUP: main.py execution started")
+import os
+import time
+
+# PRE-IMPORT MILESTONE
+start_time = time.time()
+print(f">>> BACKEND STARTUP: main.py execution started at {start_time}")
+print(f">>> RENDER PORT DETECTED: {os.environ.get('PORT', 'NOT_FOUND (Defaulting to 10000)')}")
 
 import threading
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-print(">>> BACKEND STARTUP: Imports progressing...")
+# CORE IMPORTS COMPLETE
+print(">>> BACKEND STARTUP: FastAPI and Core imports complete")
 
-from backend.utils.env_loader import ensure_backend_environment_loaded, log_runtime_env_status
-from backend.utils.logger import logger
 from . import shared
-
-print(">>> BACKEND STARTUP: Shared state imported")
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    logger.info("LIFESPAN START: Initializing environment...")
-    shared.ensure_backend_environment_loaded()
-    log_runtime_env_status("api_startup")
+    print(">>> LIFESPAN START: Initializing lightweight environment...")
+    try:
+        from backend.utils.env_loader import ensure_backend_environment_loaded, log_runtime_env_status
+        ensure_backend_environment_loaded()
+        log_runtime_env_status("api_startup")
+    except Exception as e:
+        print(f">>> LIFESPAN ERROR during env load: {e}")
 
-    # HEAVY SYSTEM OPTIMIZATION:
-    # All components (Pipeline, Detectors, Intel) will now lazy-load on demand.
-    # This ensures uvicorn binds to the port IMMEDIATELY without blocking on ML setup.
-    
-    logger.info("LIFESPAN COMPLETE: API ready for port binding ✓")
+    print(">>> LIFESPAN COMPLETE: API reached ready state ✓")
     yield
-    logger.info("LIFESPAN SHUTDOWN: Cleaning up...")
+    print(">>> LIFESPAN SHUTDOWN: Cleaning up...")
 
 app = FastAPI(
     title="truth.x",
@@ -40,6 +43,9 @@ app = FastAPI(
     version="2.0.0",
     lifespan=lifespan,
 )
+
+# FASTAPI CREATED
+print(">>> BACKEND STARTUP: FastAPI instance created")
 
 # Configure CORS
 app.add_middleware(
@@ -54,6 +60,7 @@ app.add_middleware(
 print(">>> BACKEND STARTUP: Registering routers...")
 
 try:
+    # We use local imports inside the try block to catch any import-time stalls
     print(">>> BACKEND STARTUP: Importing health_routes...")
     from backend.api.health_routes import router as health_router
     app.include_router(health_router)
@@ -87,8 +94,11 @@ try:
     app.include_router(cache_router)
     
 except Exception as e:
-    print(f">>> BACKEND STARTUP ERROR: {e}")
+    print(f">>> BACKEND STARTUP ERROR during router registration: {e}")
     import traceback
     traceback.print_exc()
 
-print(">>> BACKEND STARTUP: Routers registered. Startup sequence finished.")
+# ROUTES REGISTERED
+print(">>> BACKEND STARTUP: Routers registered. Application ready for Uvicorn.")
+print(f">>> BACKEND STARTUP: Total startup sequence duration: {time.time() - start_time:.4f}s")
+print(">>> BACKEND STARTUP: Uvicorn should now bind the port and start listening...")

@@ -13,17 +13,17 @@ from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 from typing import Dict, Any, List, Optional
 
 from backend.utils.logger import logger
-from backend.detectors.audio_detector import AudioDeepfakeDetector
 
 router = APIRouter(prefix="/live", tags=["live"])
 
 # Shared detector instance
-_live_audio_detector: Optional[AudioDeepfakeDetector] = None
+_live_audio_detector = None
 
 def get_live_audio_detector():
     global _live_audio_detector
     if _live_audio_detector is None:
         try:
+            from backend.detectors.audio_detector import AudioDeepfakeDetector
             _live_audio_detector = AudioDeepfakeDetector()
         except Exception as e:
             logger.error(f"Failed to initialize live audio detector: {e}")

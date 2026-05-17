@@ -100,7 +100,7 @@ async def start_intel_analysis(
     if user_id:
         logger.info("Intel analysis started for user: %s", user_id)
 
-    job_id = shared._job_manager.create_job()
+    job_id = shared.get_job_manager().create_job()
     
     file_path = None
     if isinstance(file, UploadFile):
