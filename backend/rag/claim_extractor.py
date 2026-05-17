@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from typing import Any, Dict, List
 
 from backend.utils.logger import logger
@@ -57,7 +58,7 @@ _MEDICAL_CLAIM_PATTERNS = [
 class ClaimExtractor:
     """Extracts factual claims and manipulation signals from text."""
 
-    def extract(self, text: str) -> Dict[str, Any]:
+    def extract(self, text: str, audit=None) -> Dict[str, Any]:
         """Extract claims and meta-signals from input text.
 
         Returns:
@@ -69,6 +70,8 @@ class ClaimExtractor:
             }
         """
         if not text or not text.strip():
+            if audit is not None:
+                audit.log_event("claim_extraction", "Empty input received; no claims extracted")
             return {
                 "claims": [], "manipulation_signals": [],
                 "emotional_score": 0.0, "claim_count": 0,
@@ -76,20 +79,49 @@ class ClaimExtractor:
 
         claims = []
         signals = []
+        started = time.perf_counter()
+        logger.info("Claim extraction started chars=%d mistral_enabled=%s", len(text), bool(os.environ.get("MISTRAL_API_KEY")))
+        
+        # Increase limit to capture more transcript depth (e.g. intro noise removal)
+        processed_text = text[:5000]
 
         # Try Mistral LLM extraction first if enabled
         if os.environ.get("MISTRAL_API_KEY"):
-            llm_claims = self._extract_with_mistral(text)
+            llm_claims = self._extract_with_mistral(processed_text, audit=audit)
             if llm_claims:
-                claims = llm_claims
-
+                # Hard limit to 5 claims
+                claims = llm_claims[:5]
+                logger.info("Claim extraction Mistral path returned %d claims (limited to 5)", len(claims))
+        
         # Fallback to rule-based extraction
         if not claims:
-            sentences = self._split_sentences(text)
+            sentences = self._split_sentences(processed_text)
             for sent in sentences:
                 claim = self._analyze_sentence(sent)
                 if claim:
                     claims.append(claim)
+                if len(claims) >= 5: # Hard limit
+                    break
+
+        # --- Contextual Reasoning Fallback ---
+        # If still no claims but text exists, extract broader semantic blocks
+        if not claims and processed_text.strip():
+            logger.info("No atomic claims found; generating contextual semantic blocks for analysis")
+            # Take first 3 paragraphs or significant segments
+            segments = [p.strip() for p in processed_text.split('\n\n') if len(p.strip()) > 60][:3]
+            if not segments:
+                # Fallback to first few sentences
+                sentences = self._split_sentences(processed_text)[:3]
+                segments = sentences
+            
+            for seg in segments:
+                claims.append({
+                    "text": seg[:300], # Cap segment length
+                    "type": "contextual_reasoning",
+                    "confidence": 0.5,
+                })
+            
+            logger.info("Contextual fallback produced %d reasoning blocks", len(claims))
 
         # Detect manipulation signals
         signals.extend(self._detect_urgency(text))
@@ -97,12 +129,15 @@ class ClaimExtractor:
         signals.extend(self._detect_emotional_manipulation(text))
         signals.extend(self._detect_medical_claims(text))
 
-        # Emotional score (0 = neutral, 1 = highly emotional/manipulative)
+        # Emotional score
         emotional_score = min(1.0, len(signals) * 0.15)
-
-        logger.info("Claim extraction: %d claims, %d signals, emotional=%.2f",
-                     len(claims), len(signals), emotional_score)
-
+        elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
+        
+        logger.info(
+            "Claim extraction complete | claims=%d | signals=%d | emotional=%.2f | latency=%.2fms",
+            len(claims), len(signals), emotional_score, elapsed_ms
+        )
+        
         return {
             "claims": claims,
             "manipulation_signals": signals,
@@ -112,33 +147,32 @@ class ClaimExtractor:
 
     # ── LLM extraction ────────────────────────────────────────────────────
 
-    def _extract_with_mistral(self, text: str) -> List[Dict[str, Any]]:
-        """Use Mistral to extract complex assertive claims."""
+    def _extract_with_mistral(self, text: str, audit=None) -> List[Dict[str, Any]]:
+        """Use Mistral to extract high-value assertive claims."""
         messages = [
             {
                 "role": "system",
-                "content": "You are a factual claim extraction system. Extract 1 to 5 assertive, testable claims from the provided text. Return ONLY a JSON array of objects with keys: 'text' (the claim), 'type' (e.g., 'statistical', 'medical', 'political', 'causal'), and 'confidence' (float 0-1)."
+                "content": "You are a senior forensic analyst. Extract max 5 primary, testable, factual or statistical claims from the text. IGNORE filler, opinion, transitions, or emotional commentary. Return ONLY a JSON object with a 'claims' array of objects (text, type, confidence)."
             },
             {
                 "role": "user",
-                "content": text[:1000]
+                "content": text
             }
         ]
         
         try:
             response = run_mistral_chat(
                 messages, 
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"},
+                audit=audit,
+                stage="claim_extraction_mistral",
             )
             if response:
-                # The response_format json_object requires the output to be a JSON object,
-                # so we expect {"claims": [...]} or we parse what we get.
                 try:
                     data = json.loads(response)
-                    if isinstance(data, list):
-                        return data
-                    elif isinstance(data, dict):
-                        return data.get("claims", data.get("result", []))
+                    claims = data.get("claims", [])
+                    if isinstance(claims, list):
+                        return claims
                 except json.JSONDecodeError:
                     pass
         except Exception as e:
@@ -161,11 +195,20 @@ class ClaimExtractor:
     def _analyze_sentence(self, sentence: str) -> Dict[str, Any] | None:
         """Analyze a sentence and classify it as a claim if assertive."""
         s = sentence.strip()
-        if len(s) < 15:  # Too short to be meaningful
+        if len(s) < 20:  # Increased minimum length for meaningful claims
             return None
 
         # Skip questions
         if s.endswith("?"):
+            return None
+
+        # --- Boilerplate Filtering ---
+        boilerplate_terms = [
+            "Press Copyright", "Contact us", "Terms Privacy", "Safety How", 
+            "YouTube works", "Test new features", "Google LLC", "Policy & Safety"
+        ]
+        if any(term in s for term in boilerplate_terms):
+            logger.debug("Filtered out boilerplate claim candidate: %r", s[:100])
             return None
 
         # Detect claim type

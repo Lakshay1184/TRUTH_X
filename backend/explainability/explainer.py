@@ -12,6 +12,7 @@ Generates:
 
 from __future__ import annotations
 
+import os
 from typing import Any, Dict, List, Optional
 
 from backend.utils.logger import logger
@@ -143,13 +144,16 @@ class ExplainabilityEngine:
         logger.info("Explainability: %d reasons, %d suspicious indicators",
                      len(all_reasons), len(suspicious))
 
-        # Generate Mistral reasoning report if enabled
-        reasoner = MistralReasoner()
-        intelligence_report = reasoner.generate_report({
-            "overall_reasons": all_reasons[:10],
-            "suspicious_indicators": list(set(suspicious)),
-            "per_modality_labels": {k: v.get("label") for k, v in per_modality.items()},
-        })
+        intelligence_report = ""
+        if os.environ.get("MISTRAL_REASONING_ENABLED", "").lower() in ("1", "true", "yes"):
+            reasoner = MistralReasoner()
+            intelligence_report = reasoner.generate_report({
+                "overall_reasons": all_reasons[:10],
+                "suspicious_indicators": list(set(suspicious)),
+                "per_modality_labels": {k: v.get("label") for k, v in per_modality.items()},
+            })
+        else:
+            logger.info("Mistral explainability reasoning skipped (MISTRAL_REASONING_ENABLED is not enabled)")
 
         return {
             "overall_reasons": all_reasons[:10],  # Top 10 most important
@@ -268,7 +272,7 @@ class ExplainabilityEngine:
                 "indicator": "high_ai_probability",
                 "severity": "high" if ai_prob > 0.85 else "medium",
                 "detail": f"Text analysis indicates {ai_prob:.0%} probability of AI generation",
-                "evidence": f"Model: DeBERTa-v3-large (RAID benchmark #1)",
+                "evidence": f"Model: RoBERTa-based Neural Classifier (ChatGPT Detection)",
                 "modality": "text",
             })
 

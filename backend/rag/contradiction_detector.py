@@ -10,6 +10,7 @@ Fallback: Local keyword-based heuristic
 from __future__ import annotations
 
 import re
+import time
 from typing import Any, Dict, List, Optional
 
 import json
@@ -57,6 +58,7 @@ class ContradictionDetector:
         self,
         claims: List[Dict[str, Any]],
         evidence: Dict[str, Any],
+        audit=None,
     ) -> Dict[str, Any]:
         """Analyze claims against evidence for contradictions.
 
@@ -84,12 +86,32 @@ class ContradictionDetector:
         """
         evidence_pieces = evidence.get("evidence_pieces", [])
         if not claims or not evidence_pieces:
+            logger.info(
+                "Contradiction analysis skipped claims=%d evidence=%d",
+                len(claims),
+                len(evidence_pieces),
+            )
+            if audit is not None:
+                audit.log_event(
+                    "contradiction_analysis",
+                    "Skipped due to insufficient claims or evidence",
+                    claim_count=len(claims),
+                    evidence_count=len(evidence_pieces),
+                )
             return self._no_evidence_result(claims)
 
         analyses = []
         supporting = 0
         contradicting = 0
         neutral = 0
+        started = time.perf_counter()
+        if audit is not None:
+            audit.log_event(
+                "contradiction_analysis",
+                "Contradiction analysis started",
+                claim_count=len(claims),
+                evidence_count=len(evidence_pieces),
+            )
 
         for claim in claims:
             claim_text = claim.get("text", "")
@@ -108,19 +130,22 @@ class ContradictionDetector:
                 # 1. Try Mistral LLM reasoning first
                 relation, confidence = None, 0.0
                 if os.environ.get("MISTRAL_API_KEY"):
+                    logger.info("Contradiction analysis attempting Mistral reasoning claim=%r evidence_source=%s", claim_text[:120], ev.get("publisher", "Unknown"))
                     relation, confidence = self._llm_classify(claim_text, ev_content)
                 
                 # 2. Try NLI via HF API if LLM didn't work
                 if relation is None:
+                    logger.info("Contradiction analysis using HF NLI fallback claim=%r evidence_source=%s", claim_text[:120], ev.get("publisher", "Unknown"))
                     relation, confidence = self._nli_classify(claim_text, ev_content)
 
                 # 3. Fallback to heuristic if APIs unavailable
                 if relation is None:
+                    logger.warning("Contradiction analysis fallback to heuristic source=%s", ev.get("publisher", "Unknown"))
                     relation, confidence = self._heuristic_classify(claim_text, ev_content, ev)
 
                 # Weight by source credibility
                 source_name = ev.get("publisher", "").lower()
-                source_cred = _SOURCE_CREDIBILITY.get(source_name, 0.5)
+                source_cred = _SOURCE_CREDIBILITY.get(source_name, 0.35)
 
                 explanation = self._generate_explanation(
                     relation, confidence, claim_text, ev_content,
@@ -128,6 +153,7 @@ class ContradictionDetector:
                 )
 
                 analyses.append({
+                    "claim_id": ev.get("claim_id", ""),
                     "claim": claim_text[:200],
                     "evidence": ev_content[:300],
                     "relation": relation,
@@ -135,6 +161,7 @@ class ContradictionDetector:
                     "source": ev.get("publisher", "Unknown"),
                     "source_credibility": source_cred,
                     "url": ev.get("url", ""),
+                    "evidence_id": ev.get("evidence_id", ""),
                     "explanation": explanation,
                 })
 
@@ -144,6 +171,16 @@ class ContradictionDetector:
                     contradicting += 1
                 else:
                     neutral += 1
+
+                if audit is not None:
+                    audit.log_event(
+                        "contradiction_analysis",
+                        "Claim-evidence relation classified",
+                        claim=claim_text[:200],
+                        source=ev.get("publisher", "Unknown"),
+                        relation=relation,
+                        confidence=round(confidence, 3),
+                    )
 
         # Compute credibility score
         credibility = self._compute_credibility(
@@ -156,8 +193,22 @@ class ContradictionDetector:
         # Generate evidence summary
         summary = self._generate_summary(analyses, verdict, credibility)
 
+        elapsed_ms = round((time.perf_counter() - started) * 1000, 2)
+
         logger.info("Contradiction analysis: verdict=%s, credibility=%d, S=%d/C=%d/N=%d",
                      verdict, credibility, supporting, contradicting, neutral)
+        logger.info("Contradiction analysis complete latency_ms=%.2f analyses=%d", elapsed_ms, len(analyses))
+        if audit is not None:
+            audit.log_event(
+                "contradiction_analysis",
+                "Contradiction analysis complete",
+                verdict=verdict,
+                credibility_score=credibility,
+                supporting_count=supporting,
+                contradicting_count=contradicting,
+                neutral_count=neutral,
+                latency_ms=elapsed_ms,
+            )
 
         return {
             "contradictions": analyses,
@@ -180,7 +231,7 @@ class ContradictionDetector:
             },
             {
                 "role": "user",
-                "content": f"CLAIM: {premise}\n\EVIDENCE: {hypothesis}"
+                "content": f"CLAIM: {premise}\nEVIDENCE: {hypothesis}"
             }
         ]
         
@@ -302,7 +353,7 @@ class ContradictionDetector:
         # Contradiction penalty (weighted by source credibility)
         for a in analyses:
             if a["relation"] == "contradiction":
-                source_cred = a.get("source_credibility", 0.5)
+                source_cred = a.get("source_credibility", 0.35)
                 penalty = 30 * source_cred * a["confidence"]
                 credibility -= penalty
 
@@ -313,7 +364,7 @@ class ContradictionDetector:
         # Supporting evidence bonus
         for a in analyses:
             if a["relation"] == "entailment":
-                source_cred = a.get("source_credibility", 0.5)
+                source_cred = a.get("source_credibility", 0.35)
                 bonus = 10 * source_cred * a["confidence"]
                 credibility = min(100, credibility + bonus)
 
@@ -333,15 +384,16 @@ class ContradictionDetector:
         """Map credibility score to verdict category."""
         total = supporting + contradicting + neutral
         if total == 0:
-            return "Unverified"
-        if credibility >= 70:
-            return "Verified"
-        elif credibility >= 50:
-            return "Partially True"
-        elif credibility >= 30:
-            return "Misleading"
+            return "unverified"
+        # Use label-first categories: supported / partially_supported / limited_evidence / contradicted
+        if credibility >= 75:
+            return "supported"
+        elif credibility >= 55:
+            return "partially_supported"
+        elif credibility >= 40:
+            return "limited_evidence"
         else:
-            return "Likely False"
+            return "contradicted"
 
     # ── Explanation Generation ────────────────────────────────────────────
 
@@ -386,9 +438,9 @@ class ContradictionDetector:
     def _no_evidence_result(claims: List[Dict]) -> Dict[str, Any]:
         return {
             "contradictions": [],
-            "verdict": "Unverified",
-            "credibility_score": 50,
-            "evidence_summary": "No evidence found — this claim could not be verified against trusted sources.",
+            "verdict": "unverified",
+            "credibility_score": 0,
+            "evidence_summary": "No grounded evidence was retrieved for this claim. Retrieval diagnostics should be consulted.",
             "supporting_count": 0,
             "contradicting_count": 0,
             "neutral_count": 0,

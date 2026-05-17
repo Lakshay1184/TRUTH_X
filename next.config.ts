@@ -32,13 +32,7 @@ const nextConfig: NextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
-  turbopack: {
-    rules: {
-      "*.{jsx,tsx}": {
-        loaders: [loaderPath]
-      }
-    }
-  },
+  // turbopack rules removed to avoid experimental devtools bundler issues
   experimental: {
     serverActions: {
       bodySizeLimit: '100mb',

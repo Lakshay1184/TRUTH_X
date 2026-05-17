@@ -24,11 +24,11 @@ import os
 import sys
 import time
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Literal, Optional
 
 import yaml
-from dotenv import load_dotenv
 
+from backend.utils.env_loader import ensure_backend_environment_loaded, log_runtime_env_status
 from backend.utils.logger import logger
 from backend.utils.media import extract_video_metadata, find_ffprobe
 from backend.pipelines.preprocessing import (
@@ -107,12 +107,12 @@ class DeepfakeDetectionPipeline:
                 self.models["audio"] = AudioDeepfakeDetector()
 
             elif model_name == "text":
-                logger.info("Loading Text AI Detector...")
+                logger.info("Loading robust Text AI Detector (RoBERTa)...")
                 from backend.detectors.text_detector import TextAIDetector
                 self.models["text"] = TextAIDetector()
 
             elif model_name == "image":
-                logger.info("Loading Image AI Detector...")
+                logger.info("Loading upgraded Image AI Detector (Ensemble)...")
                 from backend.detectors.image_detector import ImageAIDetector
                 self.models["image"] = ImageAIDetector()
 
@@ -176,8 +176,12 @@ class DeepfakeDetectionPipeline:
 
     def process(
         self,
+        modality: Literal["text", "image", "audio", "video"] = "text",
         video_path: Optional[str] = None,
+        audio_path: Optional[str] = None,
+        image_path: Optional[str] = None,
         query: Optional[str] = None,
+        verify_news: bool = False,
         status_callback: Optional[Callable[[str], None]] = None,
     ) -> Dict[str, Any]:
         """Run the full analysis pipeline.
@@ -197,6 +201,15 @@ class DeepfakeDetectionPipeline:
 
         t_start = time.perf_counter()
         _set_status("Initializing analysis...")
+        logger.info(
+            "Pipeline routing selected: modality=%s verify_news=%s video=%s audio=%s image=%s text=%s",
+            modality,
+            verify_news,
+            bool(video_path),
+            bool(audio_path),
+            bool(image_path),
+            bool(query and query.strip()),
+        )
 
         metadata: Dict[str, Any] = {}
         video_result: Optional[Dict[str, Any]] = None
@@ -210,29 +223,108 @@ class DeepfakeDetectionPipeline:
         manipulation_signals: List[Dict[str, str]] = []
 
         # ── Video Processing ─────────────────────────────────────────────
-        if video_path and os.path.exists(video_path):
+        if modality == "video" and video_path and os.path.exists(video_path):
             video_result, audio_result, metadata, drift_data, ai_models = (
                 self._process_video(video_path, _set_status, ai_models)
             )
+            if video_result is None:
+                logger.warning("Video detector returned no result for %s", video_path)
+                raise RuntimeError("Video detector failed to produce a result.")
+            if audio_result is None:
+                logger.warning("Audio detector returned no result for %s", video_path)
+
+            # ── CROSS-MODAL INTEGRATION ────────────────────────────────────
+            # If both show manipulation, we have a highly suspicious case
+            if video_result.get("label") == "fake" and audio_result and audio_result.get("label") == "fake":
+                v_conf = video_result.get("confidence", 0)
+                a_conf = audio_result.get("confidence", 0)
+                if "explainability" not in video_result:
+                    video_result["explainability"] = {"reasons": []}
+                
+                video_result["explainability"]["reasons"].append({
+                    "indicator": "cross_modal_manipulation",
+                    "severity": "critical" if (v_conf > 0.8 and a_conf > 0.8) else "high",
+                    "detail": "Synchronized manipulation detected across both video and audio streams.",
+                    "evidence": f"Video Fake Conf: {v_conf:.2%}, Audio Fake Conf: {a_conf:.2%}"
+                })
+                logger.info("Cross-modal manipulation detected (Video + Audio)")
+
+        # ── Audio-only Processing ─────────────────────────────────────
+        if modality == "audio" and audio_path and os.path.exists(audio_path):
+            _set_status("Analyzing audio frequency anomalies...")
+            self.load_model("audio")
+            if self.models.get("audio"):
+                audio_result = self._run_audio_detector_from_file(audio_path)
+            else:
+                raise RuntimeError("Audio detector unavailable; cannot complete audio analysis.")
+            if audio_result is None:
+                logger.warning("Audio detector returned no result for %s", audio_path)
+                raise RuntimeError("Audio detector failed to produce a result.")
+            if not metadata:
+                metadata = _build_basic_file_info(audio_path)
+
+        # ── Image-only Processing ─────────────────────────────────────
+        if modality == "image" and image_path and os.path.exists(image_path):
+            _set_status("Analyzing image authenticity...")
+            self.load_model("image")
+            if self.models.get("image"):
+                image_result = self._run_image_detector(image_path)
+            else:
+                raise RuntimeError("Image detector unavailable; cannot complete image analysis.")
+            if image_result is None:
+                logger.warning("Image detector returned no result for %s", image_path)
+                raise RuntimeError("Image detector failed to produce a result.")
+            if not metadata:
+                metadata = _build_basic_file_info(image_path)
 
         # ── Text Processing ──────────────────────────────────────────────
-        if query and query.strip():
+        if modality == "text" and query and query.strip():
             text_result, fact_check, ai_models = self._process_text(
-                query, _set_status, ai_models,
+                query, _set_status, ai_models, run_fact_search=False,
             )
+            if text_result is None:
+                raise RuntimeError("Text detector returned no result for query input.")
+
+        # ── Model inventory enrichment (audio/image) ────────────────────
+        if audio_result:
+            if not audio_result.get("error"):
+                ai_models.append({
+                    "name": "AudioDeepfakeDetector",
+                    "score": int(audio_result.get("fake_probability", 0) * 100),
+                    "label": audio_result.get("label", "unknown"),
+                    "details": f"Segments analyzed: {audio_result.get('num_segments_analyzed', 0)}"
+                })
+            else:
+                ai_models.append({
+                    "name": "AudioDeepfakeDetector",
+                    "score": 50,
+                    "label": "Offline",
+                    "details": f"Error: {audio_result.get('error')}"
+                })
+
+        if image_result:
+            ai_models.append({
+                "name": "ImageAIDetector",
+                "score": int(image_result.get("fake_probability", 0) * 100),
+                "label": image_result.get("label", "unknown"),
+            })
 
         # ── Fake News RAG Verification (NEW) ─────────────────────────────
-        if query and query.strip():
+        if modality == "text" and verify_news and query and query.strip():
             _set_status("Running fake news verification pipeline...")
             news_verification, manipulation_signals = self._run_news_verification(
                 query, _set_status,
             )
+            if news_verification is None:
+                logger.warning("News verification pipeline returned no result")
+        elif modality == "text" and query and query.strip():
+            logger.info("News verification skipped for text analysis (verify_news=false)")
 
         # ── Aggregation & Postprocessing ─────────────────────────────────
         _set_status("Computing final risk assessment...")
 
         # Legacy risk scoring (backwards compatible)
-        risk_assessment = compute_risk_score(metadata, video_result, text_result)
+        risk_assessment = compute_risk_score(metadata, video_result, audio_result, text_result, image_result)
 
         # Drift data (if not already generated from video processing)
         if not drift_data:
@@ -240,27 +332,41 @@ class DeepfakeDetectionPipeline:
             if duration > 0:
                 drift_data = generate_drift_data(duration, video_result)
 
-        # Combined label aggregation (legacy)
+        # Combined label aggregation
         base_report = aggregate_results(
             video_result=video_result,
             audio_result=audio_result,
             text_result=text_result,
+            image_result=image_result,
             articles=fact_check,
             weights={
                 "video": self.config.get("aggregation", {}).get("video_weight", 0.45),
                 "audio": self.config.get("aggregation", {}).get("audio_weight", 0.30),
                 "text": self.config.get("aggregation", {}).get("text_weight", 0.25),
+                "image": self.config.get("aggregation", {}).get("image_weight", 0.20),
             },
         )
 
         # ── NEW: Provenance Analysis ─────────────────────────────────────
-        _set_status("Analyzing manipulation provenance...")
-        provenance_result = self.provenance_engine.analyze_provenance(
-            video_result=video_result,
-            audio_result=audio_result,
-            text_result=text_result,
-            image_result=image_result,
+        # IMPORTANT: Only run provenance in VERIFICATION MODE (verify_news=True)
+        # This avoids unnecessary heavy processing in normal AI detection mode
+        provenance_result: Dict[str, Any] = {}
+        should_run_provenance = verify_news and modality in ("video", "audio", "image") or (
+            verify_news and modality == "text" and text_result and text_result.get("label") == "ai-generated"
         )
+        if should_run_provenance:
+            _set_status("Analyzing manipulation provenance...")
+            provenance_result = self.provenance_engine.analyze_provenance(
+                video_result=video_result,
+                audio_result=audio_result,
+                text_result=text_result,
+                image_result=image_result,
+            )
+        else:
+            if not verify_news:
+                logger.info("Provenance analysis skipped - not in verification mode (verify_news=false)")
+            else:
+                logger.info("Provenance analysis skipped for modality=%s", modality)
 
         # ── NEW: Unified Credibility Scoring ─────────────────────────────
         _set_status("Computing credibility score...")
@@ -292,6 +398,12 @@ class DeepfakeDetectionPipeline:
         full_report: Dict[str, Any] = {
             # Basic info
             "summary": "Analysis complete",
+            "modality": modality,
+            "pipelines_activated": self._activated_pipelines(
+                modality=modality,
+                verify_news=bool(news_verification),
+                provenance=bool(provenance_result),
+            ),
             "analyzed_at": datetime.now(timezone.utc).isoformat(),
             "processing_time_seconds": processing_time,
 
@@ -305,6 +417,7 @@ class DeepfakeDetectionPipeline:
                 **risk_assessment,
                 "authenticity_score": credibility["score"],
                 "flags": credibility.get("flags", risk_assessment.get("flags", [])),
+                "flag_count": len(credibility.get("flags", risk_assessment.get("flags", []))),
             },
 
             # Data for UI
@@ -316,10 +429,11 @@ class DeepfakeDetectionPipeline:
             "video_result": base_report.get("video"),
             "audio_result": base_report.get("audio"),
             "text_result": base_report.get("text"),
-            "image_result": image_result,
+            "image_result": base_report.get("image"),
             "related_articles": base_report.get("related_articles"),
-            "combined_fake_probability": base_report.get("combined_fake_probability", 0.5),
-            "overall_label": base_report.get("overall_label", "uncertain"),
+            "combined_fake_probability": base_report.get("combined_fake_probability", 0.0),
+            "combined_confidence": base_report.get("combined_confidence", 0.0),
+            "overall_label": base_report.get("overall_label", "insufficient_data"),
 
             # NEW: Fake news verification
             "news_verification": news_verification,
@@ -339,11 +453,16 @@ class DeepfakeDetectionPipeline:
             full_report["overall_label"], processing_time,
         )
 
-        # Free GPU memory
-        if _has_torch_cuda():
+        # Free GPU memory only after heavyweight detectors ran.
+        heavyweight_loaded = any(
+            key in self.models and self.models.get(key) is not None
+            for key in ("video", "audio", "image")
+        ) or os.environ.get("TEXT_DETECTOR_BACKEND", "local").lower() == "transformer"
+        if heavyweight_loaded and _has_torch_cuda():
             import torch
             torch.cuda.empty_cache()
-        gc.collect()
+        if heavyweight_loaded:
+            gc.collect()
 
         return full_report
 
@@ -372,13 +491,22 @@ class DeepfakeDetectionPipeline:
             status_cb("Running deepfake detection model...")
             self.load_model("video")
             if self.models.get("video"):
+                logger.info("VideoMAE Pipeline: Entering neural analysis stage")
                 video_result = self._run_video_detector(video_path, ai_models)
+                if video_result:
+                    logger.info("VideoMAE Pipeline: Stage complete. Label=%s Conf=%.2f", 
+                                video_result.get('label'), video_result.get('confidence', 0))
+                else:
+                    logger.warning("VideoMAE Pipeline: Detector returned None")
 
             # 3. Audio detection
             status_cb("Analyzing audio frequency anomalies...")
             self.load_model("audio")
             if self.models.get("audio"):
+                logger.info("Audio Pipeline: Extracting and analyzing stream")
                 audio_result = self._run_audio_detector(video_path)
+                if audio_result:
+                    logger.info("Audio Pipeline: Stage complete. Label=%s", audio_result.get('label'))
 
             # 4. Generate drift data
             duration = metadata.get("file_info", {}).get("duration_seconds", 0)
@@ -472,6 +600,31 @@ class DeepfakeDetectionPipeline:
             logger.error("Audio detection failed: %s", e)
             return None
 
+    def _run_audio_detector_from_file(self, audio_path: str) -> Optional[Dict[str, Any]]:
+        """Run audio detector directly on an audio file."""
+        try:
+            t0 = time.perf_counter()
+            audio_result = self.models["audio"].predict(audio_path)
+            logger.info("Audio detection (file): %.2fs", time.perf_counter() - t0)
+            return audio_result
+        except Exception as e:
+            logger.error("Audio detection failed: %s", e)
+            return None
+
+    def _run_image_detector(self, image_path: str) -> Optional[Dict[str, Any]]:
+        """Run image detector on a local image file."""
+        try:
+            from PIL import Image
+            with Image.open(image_path) as img:
+                image = img.convert("RGB")
+            t0 = time.perf_counter()
+            image_result = self.models["image"].predict(image, image_path=image_path)
+            logger.info("Image detection: %.2fs", time.perf_counter() - t0)
+            return image_result
+        except Exception as e:
+            logger.error("Image detection failed: %s", e)
+            return None
+
     # ── Text Sub-pipeline ────────────────────────────────────────────────
 
     def _process_text(
@@ -479,6 +632,7 @@ class DeepfakeDetectionPipeline:
         query: str,
         status_cb: Callable[[str], None],
         ai_models: List[Dict[str, Any]],
+        run_fact_search: bool = False,
     ) -> tuple:
         """Run text detection and fact-check search."""
         text_result: Optional[Dict[str, Any]] = None
@@ -495,17 +649,23 @@ class DeepfakeDetectionPipeline:
                 logger.info("Text detection: %s (%.2fs)", text_result.get("label"), elapsed)
 
                 ai_prob = text_result.get("ai_probability", 0)
+                detector_backend = text_result.get("enhanced_analysis", {}).get("detector_backend")
+                detector_name = "FastTextAIDetector (Local Stylometric)" if detector_backend == "local" else "TextAIDetector (DeBERTa-v3 + Ensemble)"
                 ai_models.append({
-                    "name": "TextAIDetector (DeBERTa-v3 + Ensemble)",
+                    "name": detector_name,
                     "score": int(ai_prob * 100),
                 })
             except Exception as e:
                 logger.error("Text detection failed: %s", e)
+                raise RuntimeError(f"Text detection failed: {e}") from e
+        else:
+            raise RuntimeError("Text detector unavailable; cannot complete text analysis.")
 
         # Fact-check search (FAISS)
-        status_cb("Cross-referencing content database...")
-        self.load_model("faiss")
-        if self.models.get("faiss"):
+        if run_fact_search:
+            status_cb("Cross-referencing content database...")
+            self.load_model("faiss")
+        if run_fact_search and self.models.get("faiss"):
             try:
                 t0 = time.perf_counter()
                 fact_check = self.models["faiss"].search(query)
@@ -521,6 +681,22 @@ class DeepfakeDetectionPipeline:
                 logger.error("FAISS search failed: %s", e)
 
         return text_result, fact_check, ai_models
+
+    @staticmethod
+    def _activated_pipelines(
+        modality: str,
+        verify_news: bool,
+        provenance: bool,
+    ) -> List[str]:
+        pipelines = [f"{modality}_detector"]
+        if modality == "video":
+            pipelines.append("audio_detector")
+        if verify_news:
+            pipelines.append("rag_verification")
+        if provenance:
+            pipelines.append("provenance")
+        pipelines.extend(["credibility", "explainability"])
+        return pipelines
 
     # ── Fake News RAG Pipeline (NEW) ─────────────────────────────────────
 
@@ -538,8 +714,8 @@ class DeepfakeDetectionPipeline:
             if not claims:
                 logger.info("No actionable claims extracted — skipping verification")
                 return {
-                    "verdict": "Unverified",
-                    "credibility_score": 50,
+                    "verdict": "unverified",
+                    "credibility_score": 0,
                     "evidence_summary": "No specific factual claims detected in the text.",
                     "claims_analyzed": 0,
                     "contradictions_found": 0,
@@ -557,8 +733,8 @@ class DeepfakeDetectionPipeline:
 
             # Combine into news verification report
             news_verification = {
-                "verdict": contradiction_result.get("verdict", "Unverified"),
-                "credibility_score": contradiction_result.get("credibility_score", 50),
+                "verdict": contradiction_result.get("verdict", "unverified"),
+                "credibility_score": contradiction_result.get("credibility_score", 0),
                 "evidence_summary": contradiction_result.get("evidence_summary", ""),
                 "claims_analyzed": len(claims),
                 "contradictions_found": contradiction_result.get("contradicting_count", 0),
@@ -589,6 +765,24 @@ def _has_torch_cuda() -> bool:
         return False
 
 
+def _build_basic_file_info(path: str) -> Dict[str, Any]:
+    """Create minimal metadata for non-video inputs."""
+    try:
+        file_size_bytes = os.path.getsize(path)
+    except OSError:
+        file_size_bytes = 0
+    ext = os.path.splitext(path)[1].lstrip(".")
+    return {
+        "file_info": {
+            "file_name": os.path.basename(path),
+            "file_size_mb": round(file_size_bytes / (1024 * 1024), 2),
+            "file_size_bytes": file_size_bytes,
+            "container_format": ext.upper() if ext else "unknown",
+        },
+        "analyzed_at": datetime.now(timezone.utc).isoformat(),
+    }
+
+
 # ─── CLI Entry Point ─────────────────────────────────────────────────────
 
 def parse_args() -> argparse.Namespace:
@@ -600,7 +794,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
-    load_dotenv()
+    ensure_backend_environment_loaded()
+    log_runtime_env_status("pipeline_cli")
     args = parse_args()
 
     # Handle document input → query
@@ -623,7 +818,8 @@ def main() -> None:
     print(" done.")
 
     print("\nStarting analysis...")
-    report = pipeline.process(video_path=args.video, query=args.query)
+    modality = "video" if args.video else "text"
+    report = pipeline.process(modality=modality, video_path=args.video, query=args.query)
 
     # ── CLI Output ───────────────────────────────────────────────────────
     sep = "=" * 60

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/context/AuthContext";
+import { ToastProvider } from "@/context/ToastContext";
 import AgentScene from "@/components/AgentScene";
 import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
 import Navbar from "@/components/Navbar";
@@ -22,17 +23,19 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body className={`${inter.className} min-h-screen bg-black text-white selection:bg-cyan-500/30 overflow-x-hidden`}>
-        <AuthProvider>
-          <ServiceWorkerRegister />
-          <AgentScene />
-          <Navbar />
-          <div className="flex min-h-screen">
-            <Sidebar />
-            <main className="flex-1 transition-all duration-300 relative z-10 w-full">
-              {children}
-            </main>
-          </div>
-        </AuthProvider>
+        <ToastProvider>
+          <AuthProvider>
+            <ServiceWorkerRegister />
+            <AgentScene />
+            <Navbar />
+            <div className="flex min-h-screen">
+              <Sidebar />
+              <main className="flex-1 transition-all duration-300 relative z-10 w-full">
+                {children}
+              </main>
+            </div>
+          </AuthProvider>
+        </ToastProvider>
       </body>
     </html>
   );

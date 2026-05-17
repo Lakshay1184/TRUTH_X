@@ -67,6 +67,9 @@ retrieval:
   articles_path: data/articles.json
   faiss_index_path: data/faiss/articles.index
   metadata_path: data/faiss_metadata.pkl
+  # When false, local seeded corpus (data/articles.json) will be ignored even
+  # if a FAISS index exists. Set true only for debug/testing.
+  use_local_corpus: false
 
 # ── Aggregation & Scoring ────────────────────────────────
 aggregation:

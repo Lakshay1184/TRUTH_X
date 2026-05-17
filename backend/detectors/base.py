@@ -32,6 +32,40 @@ class BaseDetector(ABC):
         """Run detection and return results with explainability."""
         ...
 
+    @staticmethod
+    def interpret_authenticity(authenticity_score: float) -> str:
+        """Standard interpretation of AI authenticity percentage (0-100).
+        USED FOR: Analyze / AI Detection mode.
+        """
+        score = max(0.0, min(100.0, authenticity_score))
+        if score <= 20:
+            return "Likely AI Generated / Manipulated"
+        if score <= 40:
+            return "Suspicious / Potentially Synthetic"
+        if score <= 60:
+            return "Uncertain / Mixed Signals"
+        if score <= 80:
+            return "Likely Authentic / Human"
+        return "Strongly Authentic / Human"
+
+    @staticmethod
+    def interpret_credibility(credibility_score: float) -> str:
+        """Standard interpretation of factual credibility percentage (0-100).
+        USED FOR: Source Check / News Verification mode.
+        """
+        score = max(0.0, min(100.0, credibility_score))
+        if score <= 15:
+            return "Fake News"
+        if score <= 30:
+            return "Likely False"
+        if score <= 45:
+            return "Misleading"
+        if score <= 60:
+            return "Mixed Evidence"
+        if score <= 80:
+            return "Likely True"
+        return "Verified"
+
     def _format_result(
         self,
         label: str,
@@ -40,12 +74,19 @@ class BaseDetector(ABC):
         reasons: Optional[List[Dict[str, Any]]] = None,
         extra: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """Standard result format with explainability."""
+        """Standard result format with explainability and unified scoring."""
+        # Calculate authenticity score (0-100)
+        # Note: 1.0 - fake_probability gives authenticity as 0.0-1.0
+        auth_score = (1.0 - fake_probability) * 100
+        verdict = self.interpret_authenticity(auth_score)
+
         result: Dict[str, Any] = {
             "label": label,
             "confidence": round(confidence, 4),
             "fake_probability": round(fake_probability, 4),
             "real_probability": round(1.0 - fake_probability, 4),
+            "authenticity_score": round(auth_score, 2),
+            "verdict": verdict,
             "modality": self.modality,
             "explainability": {
                 "reasons": reasons or [],

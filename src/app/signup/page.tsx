@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { motion } from "framer-motion";
 import { useAuth } from "@/context/AuthContext";
+import { useToast } from "@/context/ToastContext";
 import Link from "next/link";
 import { Lock, Mail, ArrowRight, User, Shield } from "lucide-react";
 
@@ -11,6 +12,7 @@ export default function SignupPage() {
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const { signup } = useAuth();
+    const { showToast } = useToast();
     const [isLoading, setIsLoading] = useState(false);
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -19,7 +21,7 @@ export default function SignupPage() {
         try {
             await signup(email, password, name);
         } catch (error: any) {
-            alert(error.message);
+            showToast(error?.message || "Sign up failed", "error");
         } finally {
             setIsLoading(false);
         }

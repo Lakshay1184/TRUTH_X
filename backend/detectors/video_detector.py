@@ -36,6 +36,15 @@ def _load_config() -> dict:
         return yaml.safe_load(f)
 
 
+def _resolve_device(configured: str) -> torch.device:
+    if configured == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if configured == "cuda" and not torch.cuda.is_available():
+        logger.warning("CUDA requested for video detector but unavailable; using CPU")
+        return torch.device("cpu")
+    return torch.device(configured)
+
+
 class TemporalAnomalyClassifier(nn.Module):
     """Analyzes high-dimensional VideoMAE embeddings for temporal inconsistency."""
 
@@ -49,7 +58,7 @@ class TemporalAnomalyClassifier(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> Dict[str, float]:
-        """Analyzes frame-to-frame feature transitions."""
+        """Analyzes frame-to-frame feature transitions with continuous scoring."""
         # x: (batch, time, hidden) -> usually (1, 8, 768) for VideoMAE tubelets
         batch_size, time_steps, hidden = x.shape
         if time_steps < 2:
@@ -58,40 +67,58 @@ class TemporalAnomalyClassifier(nn.Module):
         proj_x = self.proj(x)  # (1, 8, 128)
 
         # 1. Temporal Coherence (Cosine Similarity between adjacent frames)
-        # Real videos are smooth; AI videos often have "micro-jitters" or "hyper-perfection"
         sims = F.cosine_similarity(proj_x[:, :-1, :], proj_x[:, 1:, :], dim=-1)
         mean_sim = float(sims.mean().item())
         std_sim = float(sims.std().item()) if time_steps > 2 else 0.0
 
-        # 2. Heuristic Anomaly Scoring
-        # Thresholds tuned for VideoMAE-base features
-        # AI Generator signatures: Extremely high coherence (>0.99) OR low coherence jitter (<0.85)
-        anomaly_score = 0.5
-        if mean_sim > 0.985:
-            anomaly_score = 0.85  # AI "Hyper-perfection"
-        elif mean_sim < 0.75:
-            anomaly_score = 0.80  # AI "Temporal Jitter"
+        # 2. Continuous Anomaly Scoring (Recalibrated for modern video)
+        # Philosophy: Modern phones produce extremely smooth video (0.94-0.98 similarity).
+        # We now use a wider "Natural" band to avoid false positives.
         
-        if std_sim > 0.15:
-            anomaly_score = max(anomaly_score, 0.75) # High variance/instability
+        # Center at 0.94 (ideal smooth motion)
+        dist_from_natural = abs(mean_sim - 0.94)
+        
+        # Recalibrated Scaling:
+        if mean_sim > 0.975:
+            # Towards hyper-perfection (Strong AI signature)
+            # Only start climbing aggressively after 0.98
+            dist_pushed = max(0, mean_sim - 0.975)
+            score = 0.15 + (dist_pushed * 25.0) # Reaches 0.65 at 0.995, 0.9 at 1.0
+        elif mean_sim < 0.88:
+            # Towards jitter (Manipulation signature)
+            dist_pushed = 0.88 - mean_sim
+            score = 0.15 + (dist_pushed * 3.5) # Reaches 0.5 at 0.78, 0.8 at 0.65
+        else:
+            # Inside the "Natural Band" (0.88 - 0.975)
+            # Low baseline score for healthy motion
+            score = 0.05 + (dist_from_natural * 0.5) # Max 0.08 inside band
+
+        # Apply variance penalty only if significantly unstable
+        if std_sim > 0.10:
+            score += (std_sim * 1.5)
+
+        final_score = float(np.clip(score, 0.02, 0.98))
+        
+        logger.debug("Temporal Head (Recalibrated): mean_sim=%.4f, std_sim=%.4f -> raw_score=%.4f", 
+                     mean_sim, std_sim, final_score)
 
         return {
-            "score": anomaly_score,
+            "score": final_score,
             "mean_coherence": mean_sim,
             "coherence_std": std_sim
         }
 
 
-class VideoDeepfakeDetector:
+class VideoDeepfakeDetector(BaseDetector):
     """The core VideoMAE temporal detection engine."""
 
+    modality = "video"
+
     def __init__(self) -> None:
+        super().__init__()
         self.config = _load_config()
         v_cfg = self.config.get("video", {})
         self.model_name = v_cfg.get("model_name", "MCG-NJU/videomae-base")
-        self.device = torch.device(
-            self.config.get("device", "cuda") if torch.cuda.is_available() else "cpu"
-        )
         
         # Performance/Robustness settings
         self.batch_size = 1  # 1 clip (16 frames) at a time
@@ -102,7 +129,7 @@ class VideoDeepfakeDetector:
         try:
             t0 = time.perf_counter()
             self.processor = VideoMAEImageProcessor.from_pretrained(self.model_name)
-            self.model = VideoMAEModel.from_pretrained(self.model_name)
+            self.model = VideoMAEModel.from_pretrained(self.model_name, low_cpu_mem_usage=False)
             self.model.to(self.device)
             self.model.eval()
             
@@ -128,27 +155,25 @@ class VideoDeepfakeDetector:
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
         try:
+            logger.debug("VideoMAE Inference: clip_frames=%d, tensor_shape=%s", 
+                         len(clip_frames), inputs['pixel_values'].shape)
+            
             outputs = self.model(**inputs)
             # VideoMAE tubelet embedding results in 8 temporal tokens for 16 frames
-            # last_hidden_state: (batch, spatial_temporal_patches, hidden)
-            # We perform spatial mean pooling to get pure temporal features
-            hidden = outputs.last_hidden_state # (1, 1568, 768) for 224x224
+            hidden = outputs.last_hidden_state # (1, 1568, 768)
             
-            # Pool spatially: VideoMAE patches are usually 2x16x16
-            # For 16 frames, we have 8 temporal slices. 
-            # 1568 patches / 8 = 196 spatial patches per slice (14x14)
             batch, total_tokens, h_dim = hidden.shape
             temp_tokens = 8
             spatial_tokens = total_tokens // temp_tokens
             
-            # Reshape to (batch, time, spatial, hidden)
+            # Pool spatial tokens to get pure temporal trajectory
             temporal_features = hidden.view(batch, temp_tokens, spatial_tokens, h_dim).mean(dim=2)
             
-            # Analyze temporal anomaly
             result = self.anomaly_head(temporal_features)
             
-            latency = time.perf_counter() - t_start
-            logger.debug("Clip Inference Latency: %.3fs", latency)
+            latency = (time.perf_counter() - t_start) * 1000
+            logger.info("Clip Analysis: mean_sim=%.4f, score=%.4f, latency=%.2fms", 
+                        result['mean_coherence'], result['score'], latency)
             
             return {**result, "latency": latency}
             
@@ -161,20 +186,18 @@ class VideoDeepfakeDetector:
         t_overall = time.perf_counter()
         
         if not frames:
-            return {"error": "Empty input", "label": "unknown", "confidence": 0.0}
+            return self._format_result(label="unknown", confidence=0.0, fake_probability=0.5)
 
         num_frames = len(frames)
         logger.info("Pipeline Start: Analyzing %d frames for temporal integrity", num_frames)
 
-        # 1. TEMPORAL CLIP EXTRACTION (16-frame sliding/padded window)
+        # 1. TEMPORAL CLIP EXTRACTION
         clips = []
         clip_size = 16
         if num_frames >= clip_size:
-            # Extract non-overlapping or slightly overlapping clips
             for i in range(0, num_frames - clip_size + 1, clip_size // 2):
                 clips.append(frames[i : i + clip_size])
         else:
-            # Padding for short videos
             padded = frames.copy()
             while len(padded) < clip_size:
                 padded.append(padded[-1])
@@ -182,15 +205,12 @@ class VideoDeepfakeDetector:
 
         # 2. RUN TEMPORAL INFERENCE
         clip_results = []
-        for i, clip in enumerate(clips[:4]): # Limit to 4 clips for local speed/batching
+        for i, clip in enumerate(clips[:4]):
             res = self._run_inference(clip)
             if "error" not in res:
                 clip_results.append(res)
-            else:
-                logger.warning("Clip %d failed: %s", i, res["error"])
 
         # 3. ANOMALY AMPLIFICATION SCORING
-        # Instead of averaging, the MOST suspicious clip dominates the result.
         if not clip_results:
             temporal_prob = 0.5
             max_latency = 0.0
@@ -199,71 +219,79 @@ class VideoDeepfakeDetector:
             max_score = max(scores)
             mean_score = sum(scores) / len(scores)
             max_latency = max([c.get("latency", 0) for c in clip_results])
-            
-            # Amplification: If any clip is high-risk, weight it 80%
             temporal_prob = (max_score * 0.8) + (mean_score * 0.2)
-            logger.info("Temporal Anomaly Amplification: Max=%0.2f, Mean=%0.2f -> Final=%0.2f", 
-                        max_score, mean_score, temporal_prob)
 
-        # 4. BIOMETRIC LANDMARK CONSISTENCY (MediaPipe)
+        # 4. BIOMETRIC LANDMARK CONSISTENCY
         landmark_res = self._analyze_face_landmarks(frames)
         landmark_prob = landmark_res.get("landmark_anomaly_score", 0.0) if landmark_res else 0.5
         
-        # 5. FINAL CALIBRATED ENSEMBLE
-        # Prioritize whichever model is more "sure" about a deepfake
-        final_prob = max(temporal_prob, landmark_prob) if (temporal_prob > 0.7 or landmark_prob > 0.7) else (temporal_prob * 0.6 + landmark_prob * 0.4)
+        # 5. MULTI-SIGNAL CORROBORATION (Recalibrated Fusion)
+        # Philosophy: Extreme confidence (90%+) requires multiple independent forensic signals.
+        # Single-metric anomalies should be dampened to "Suspicious" or "Mixed" levels.
         
-        # Sigmoid Calibration to push away from 50%
-        calibrated_prob = 1 / (1 + math.exp(-12 * (final_prob - 0.5)))
-        
-        label = "fake" if calibrated_prob > 0.5 else "real"
-        confidence = calibrated_prob if label == "fake" else (1.0 - calibrated_prob)
+        # Base fusion: weighted average biased towards the stronger signal
+        if (temporal_prob > 0.75 and landmark_prob > 0.75):
+            # CORROBORATED: Both temporal and biometric signals indicate AI
+            final_prob = max(temporal_prob, landmark_prob)
+            logger.info("Forensic Corroboration: Multiple signals detected (T=%.2f, B=%.2f)", 
+                        temporal_prob, landmark_prob)
+        elif (temporal_prob < 0.3 and landmark_prob < 0.3):
+            # AUTHENTIC CORROBORATION: Both indicate healthy video
+            final_prob = min(temporal_prob, landmark_prob)
+        else:
+            # ISOLATED OR AMBIGUOUS: Signals are neutral or only one triggers
+            # Dampen confidence aggressively to avoid false positives
+            final_prob = (temporal_prob * 0.5) + (landmark_prob * 0.5)
+            # Pull towards neutral (0.5) if significantly different
+            if abs(temporal_prob - landmark_prob) > 0.4:
+                final_prob = (final_prob + 0.5) / 2.0
+                logger.info("Confidence Dampening: Conflicting signals (T=%.2f, B=%.2f) -> Pulled to %.2f", 
+                            temporal_prob, landmark_prob, final_prob)
 
-        # 6. EXPLAINABILITY GENERATION
+        # 6. SIGMOID CALIBRATION (Push away from 50%, but with a dampened slope)
+        # Using a gentler slope (k=8 instead of k=12) to avoid "snap" to 99%
+        calibrated_fake_prob = 1 / (1 + math.exp(-8 * (final_prob - 0.5)))
+        
+        # Limit certainty to 0.96 for uncorroborated single-modality signals
+        if (temporal_prob < 0.7 or landmark_prob < 0.7) and calibrated_fake_prob > 0.85:
+            calibrated_fake_prob = 0.85
+            logger.info("Certainty Capped: Single-signal anomaly capped at 85%")
+        
+        label = "fake" if calibrated_fake_prob > 0.5 else "real"
+        confidence = calibrated_fake_prob if label == "fake" else (1.0 - calibrated_fake_prob)
+
+        # 7. EXPLAINABILITY GENERATION
         reasons = []
-        if temporal_prob > 0.65:
-            reasons.append(BaseDetector._make_reason(
-                "temporal_inconsistency", "high" if temporal_prob > 0.8 else "medium",
+        if temporal_prob > 0.70:
+            reasons.append(self._make_reason(
+                "temporal_inconsistency", "high" if temporal_prob > 0.85 else "medium",
                 "Unnatural frame-to-frame coherence detected by Temporal Transformer.",
-                f"VideoMAE Score: {temporal_prob:.2f} (Inference Latency: {max_latency:.2fs})"
+                f"VideoMAE Score: {temporal_prob:.2f}"
             ))
         
         if landmark_res and landmark_res.get("reasons"):
             reasons.extend(landmark_res["reasons"])
 
-        if label == "fake" and confidence > 0.85:
-            reasons.append(BaseDetector._make_reason(
-                "high_confidence_fake", "critical",
-                "Deepfake detected with high confidence across temporal and biometric signals.",
-                "Multiple AI generation signatures identified in the facial motion and geometry."
-            ))
-
         overall_time = time.perf_counter() - t_overall
-        logger.info("Video Pipeline Complete: label=%s, confidence=%0.2f%%, time=%0.2fs", 
-                    label, confidence*100, overall_time)
+        self._cleanup_gpu()
 
-        return {
-            "label": label,
-            "confidence": round(confidence, 4),
-            "fake_probability": round(calibrated_prob, 4),
-            "real_probability": round(1.0 - calibrated_prob, 4),
-            "temporal_anomaly_score": round(temporal_prob, 4),
-            "landmark_anomaly_score": round(landmark_prob, 4),
-            "fallback_active": self.fallback_active,
-            "modality": "video",
-            "debug_info": {
-                "frames_processed": num_frames,
-                "clips_analyzed": len(clip_results),
-                "inference_latency_max": round(max_latency, 3),
-                "total_pipeline_time": round(overall_time, 3),
-                "fallback_reason": self.init_error
-            },
-            "explainability": {
-                "reasons": reasons,
-                "suspicious_indicators": [r["indicator"] for r in reasons if r.get("severity") in ("high", "critical")]
-            },
-            "landmark_analysis": landmark_res if landmark_res else {}
-        }
+        return self._format_result(
+            label=label,
+            confidence=confidence,
+            fake_probability=calibrated_fake_prob,
+            reasons=reasons,
+            extra={
+                "debug_info": {
+                    "frames_processed": num_frames,
+                    "clips_analyzed": len(clip_results),
+                    "total_pipeline_time": round(overall_time, 3),
+                },
+                "technical_signals": {
+                    "temporal_anomaly": round(temporal_prob, 4),
+                    "landmark_anomaly": round(landmark_prob, 4),
+                }
+            }
+        )
 
     def _analyze_face_landmarks(self, frames: List[Image.Image]) -> Optional[Dict[str, Any]]:
         """Analyzes facial landmarks for biological inconsistencies (blinking, drift, etc.)."""

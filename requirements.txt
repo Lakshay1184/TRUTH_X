@@ -15,6 +15,13 @@ accelerate
 sentence-transformers
 tokenizers
 
+# LangChain / LangGraph orchestration
+langchain
+langchain-core
+langchain-community
+langchain-text-splitters
+langgraph
+
 # Computer Vision
 opencv-python
 Pillow
@@ -24,6 +31,7 @@ fastapi
 uvicorn[standard]
 python-multipart
 pydantic
+celery
 
 # Audio Processing
 librosa
@@ -35,15 +43,15 @@ python-dotenv
 pyyaml
 httpx
 
-# FAISS (CPU)
-faiss-cpu
-
 # Document Parsing
 PyPDF2
 python-docx
 
 # FFmpeg (fallback binary)
 imageio-ffmpeg
+
+# Web scraping
+beautifulsoup4
 
 # Face Landmark Detection (for video deepfake analysis)
 mediapipe

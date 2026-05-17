@@ -3,6 +3,7 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { useToast } from "@/context/ToastContext";
 
 interface AuthContextType {
     user: any | null;
@@ -10,61 +11,130 @@ interface AuthContextType {
     signup: (email: string, password?: string, name?: string) => Promise<void>;
     logout: () => Promise<void>;
     isAuthenticated: boolean;
+    loading: boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
     const [user, setUser] = useState<any | null>(null);
+    const [loading, setLoading] = useState<boolean>(true);
     const router = useRouter();
+    const { showToast } = useToast();
 
     useEffect(() => {
-        // Check active sessions and sets the user
-        supabase.auth.getSession().then(({ data: { session } }) => {
-            setUser(session?.user ?? null);
+        let mounted = true;
+
+        async function restore() {
+            try {
+                setLoading(true);
+                const {
+                    data: { session },
+                } = await supabase.auth.getSession();
+                if (!mounted) return;
+                setUser(session?.user ?? null);
+            } catch (err: any) {
+                console.error("Failed to restore session:", err);
+            } finally {
+                if (mounted) setLoading(false);
+            }
+        }
+
+        restore();
+
+        const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+            try {
+                setUser(session?.user ?? null);
+            } catch (e) {
+                console.error("onAuthStateChange handler error:", e);
+            }
         });
 
-        // Listen for changes on auth state (logged in, signed out, etc.)
-        const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-            setUser(session?.user ?? null);
-        });
+        const subscription = data?.subscription;
 
-        return () => subscription.unsubscribe();
-    }, []);
+        return () => {
+            mounted = false;
+            if (subscription && typeof subscription.unsubscribe === "function") subscription.unsubscribe();
+        };
+    }, [showToast]);
 
     const login = async (email: string, password?: string) => {
-        if (!password) throw new Error("Password is required");
-        const { data, error } = await supabase.auth.signInWithPassword({
-            email,
-            password,
-        });
-        if (error) throw error;
-        router.push("/");
+        if (!password) {
+            showToast("Password is required", "error");
+            throw new Error("Password is required");
+        }
+        try {
+            const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+            if (error) {
+                showToast(error.message || "Sign in failed", "error");
+                throw error;
+            }
+            // Update local user immediately
+            const userObj = (data as any)?.user ?? (data as any)?.session?.user ?? null;
+            setUser(userObj);
+            showToast("Signed in successfully", "success");
+            router.push("/");
+        } catch (err: any) {
+            console.error("Login error:", err);
+            throw err;
+        }
     };
 
     const signup = async (email: string, password?: string, name?: string) => {
-        if (!password) throw new Error("Password is required");
-        const { data, error } = await supabase.auth.signUp({
-            email,
-            password,
-            options: {
-                data: {
-                    full_name: name,
-                }
+        if (!password) {
+            showToast("Password is required", "error");
+            throw new Error("Password is required");
+        }
+        try {
+            const { data, error } = await supabase.auth.signUp({
+                email,
+                password,
+                options: {
+                    data: {
+                        full_name: name,
+                    },
+                },
+            });
+            if (error) {
+                showToast(error.message || "Sign up failed", "error");
+                throw error;
             }
-        });
-        if (error) throw error;
-        router.push("/");
+
+            const userObj = (data as any)?.user ?? (data as any)?.session?.user ?? null;
+            if (userObj) {
+                setUser(userObj);
+                showToast("Account created and signed in", "success");
+                router.push("/");
+                return;
+            }
+
+            // If no session returned, notify user to confirm email
+            showToast("Account created. Please check your email to confirm your account.", "info");
+            router.push("/");
+        } catch (err: any) {
+            console.error("Signup error:", err);
+            throw err;
+        }
     };
 
     const logout = async () => {
-        const { error } = await supabase.auth.signOut();
-        if (error) throw error;
-        router.push("/login");
+        try {
+            const { error } = await supabase.auth.signOut();
+            if (error) {
+                showToast(error.message || "Sign out failed", "error");
+                throw error;
+            }
+            setUser(null);
+            showToast("Signed out", "info");
+            router.push("/login");
+        } catch (err) {
+            console.error("Logout error:", err);
+            throw err;
+        }
     };
 
     return (
-        <AuthContext.Provider value={{ user, login, signup, logout, isAuthenticated: !!user }}>
+        <AuthContext.Provider value={{ user, login, signup, logout, isAuthenticated: !!user, loading }}>
             {children}
         </AuthContext.Provider>
     );

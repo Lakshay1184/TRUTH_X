@@ -15,7 +15,10 @@ from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
+from backend.utils.env_loader import ensure_backend_environment_loaded
 from backend.utils.logger import logger
+
+ensure_backend_environment_loaded()
 
 # ─── Configuration ───────────────────────────────────────────────────────
 
@@ -229,16 +232,66 @@ class HFInferenceClient:
 # ─── Synchronous wrapper for thread-based usage ─────────────────────────
 
 def run_hf_inference(model_id: str, payload: Dict[str, Any], token: Optional[str] = None) -> Optional[Any]:
-    """Synchronous wrapper for HF inference — for use in background threads."""
-    client = HFInferenceClient(token=token)
-    try:
+    """Synchronous wrapper for HF inference that handles nested event loops."""
+    
+    def _run_in_new_loop():
+        client = HFInferenceClient(token=token)
         loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(client.infer(model_id, payload))
-        loop.run_until_complete(client.close())
-        return result
-    except Exception as e:
-        logger.error("Sync HF inference failed: %s", e)
+        try:
+            asyncio.set_event_loop(loop)
+            result = loop.run_until_complete(client.infer(model_id, payload))
+            loop.run_until_complete(client.close())
+            return result
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
+
+    # Check if a loop is already running
+    try:
+        running_loop = asyncio.get_running_loop()
+        loop_running = running_loop.is_running()
+    except RuntimeError:
+        loop_running = False
+
+    if not loop_running:
+        try:
+            return _run_in_new_loop()
+        except Exception as e:
+            logger.error("Sync HF inference failed reason=%s", e)
+            return None
+
+    # If we're inside a running loop, run the coroutine in a separate thread
+    import threading
+    import queue
+
+    q: "queue.Queue" = queue.Queue()
+
+    def _thread_worker():
+        try:
+            thread_client = HFInferenceClient(token=token)
+            result = asyncio.run(thread_client.infer(model_id, payload))
+            try:
+                asyncio.run(thread_client.close())
+            except Exception:
+                pass
+            q.put((True, result))
+        except Exception as e:
+            q.put((False, e))
+
+    t = threading.Thread(target=_thread_worker, daemon=True)
+    t.start()
+    t.join(timeout=_DEFAULT_TIMEOUT + 5)
+
+    try:
+        ok, payload = q.get_nowait()
+    except queue.Empty:
+        logger.error("HF thread timeout")
         return None
-    finally:
-        loop.close()
+
+    if not ok:
+        logger.error("HF thread failed reason=%s", payload)
+        return None
+
+    return payload

@@ -7,6 +7,7 @@ and extracts network graphs for propagation analysis.
 import re
 import httpx
 from bs4 import BeautifulSoup
+import os
 from backend.workers.celery_app import celery_app
 from backend.utils.logger import logger
 
@@ -77,13 +78,20 @@ def scan_social_url(self, url: str) -> dict:
 
 @celery_app.task
 def build_propagation_graph(url: str, content_id: str) -> dict:
-    """Mock implementation of propagation graph builder.
-    
-    In a real system, this searches APIs for mentions of the URL or content ID
-    to build a spread graph over time.
+    """Build a propagation graph for a URL/content ID.
+
+    The previous implementation returned a hardcoded mock graph which caused
+    demo data to appear in production UIs. We now gate the mock output behind
+    the `ENABLE_SOCIAL_MOCK` environment variable. When not enabled, return an
+    empty graph and log the skip so the caller can handle an honest 'no data'.
     """
     logger.info(f"Building propagation graph for {content_id} / {url}")
-    # Returns dummy graph data for UI rendering
+    enable_mock = os.environ.get("ENABLE_SOCIAL_MOCK", "false").lower() in ("1", "true", "yes")
+    if not enable_mock:
+        logger.info("Propagation graph mock disabled (ENABLE_SOCIAL_MOCK=false); returning empty graph")
+        return {"nodes": [], "edges": []}
+
+    # Returns dummy graph data for UI rendering when explicitly enabled
     return {
         "nodes": [
             {"id": "source", "type": "origin", "url": url},

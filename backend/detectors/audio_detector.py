@@ -31,15 +31,26 @@ def _load_config() -> dict:
         return yaml.safe_load(f)
 
 
-class AudioDeepfakeDetector:
+def _resolve_device(configured: str) -> torch.device:
+    if configured == "auto":
+        return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if configured == "cuda" and not torch.cuda.is_available():
+        logger.warning("CUDA requested for audio detector but unavailable; using CPU")
+        return torch.device("cpu")
+    return torch.device(configured)
+
+
+class AudioDeepfakeDetector(BaseDetector):
     """Detects AI-generated / synthetic speech using Wav2Vec2
     with segment-level analysis and spectral feature fusion."""
 
+    modality = "audio"
+
     def __init__(self) -> None:
+        super().__init__()
         cfg = _load_config()
         audio_cfg = cfg.get("audio", {})
         self.model_name: str = audio_cfg.get("model_name", "MelodyMachine/Deepfake-audio-detection-V2")
-        self.device = torch.device(cfg.get("device", "cuda") if torch.cuda.is_available() else "cpu")
         self.sample_rate: int = audio_cfg.get("sample_rate", 16000)
         self.segment_duration: float = audio_cfg.get("segment_duration", 3.0)
         self.max_duration: int = audio_cfg.get("max_duration", 30)
@@ -47,7 +58,7 @@ class AudioDeepfakeDetector:
         logger.info("Loading audio model '%s' on %s", self.model_name, self.device)
         try:
             self.feature_extractor = AutoFeatureExtractor.from_pretrained(self.model_name)
-            self.model = AutoModelForAudioClassification.from_pretrained(self.model_name)
+            self.model = AutoModelForAudioClassification.from_pretrained(self.model_name, low_cpu_mem_usage=False)
             self.model.to(self.device)
             self.model.eval()
             logger.info("Audio model loaded successfully ✓")
@@ -57,15 +68,7 @@ class AudioDeepfakeDetector:
 
     @torch.no_grad()
     def predict(self, audio_path: str) -> Dict[str, Any]:
-        """Analyze an audio file with segment-level analysis.
-
-        Returns:
-            - label: "fake" or "real"
-            - confidence: float (0.0 - 1.0)
-            - fake_probability / real_probability
-            - segments: per-segment analysis results
-            - spectral_features: handcrafted spectral analysis
-        """
+        """Analyze an audio file with segment-level analysis."""
         if self.model is None:
             return {"error": "Model not loaded"}
 
@@ -91,12 +94,10 @@ class AudioDeepfakeDetector:
 
             for i in range(0, len(speech), segment_samples):
                 segment = speech[i:i + segment_samples]
-                if len(segment) < sr:  # Skip segments shorter than 1 second
+                if len(segment) < sr:
                     continue
 
                 seg_result = self._predict_segment(segment, sr)
-                seg_result["start_sec"] = round(i / sr, 2)
-                seg_result["end_sec"] = round(min((i + segment_samples) / sr, len(speech) / sr), 2)
                 segments.append(seg_result)
                 segment_fake_probs.append(seg_result.get("fake_probability", 0.5))
 
@@ -106,91 +107,56 @@ class AudioDeepfakeDetector:
                 total_weight = sum(weights)
                 fake_prob = sum(p * w for p, w in zip(segment_fake_probs, weights)) / total_weight
             else:
-                # Fallback: full-file analysis
                 full_result = self._predict_segment(speech, sr)
                 fake_prob = full_result.get("fake_probability", 0.5)
 
-            real_prob = 1.0 - fake_prob
-
             # ── Spectral consistency features ──
             spectral = self._extract_spectral_features(speech, sr)
-
-            # ── Spectral anomaly adjustment ──
-            spectral_adjustment = self._spectral_anomaly_score(spectral)
-            adjusted_fake_prob = np.clip(fake_prob + spectral_adjustment * 0.1, 0.01, 0.99)
-            adjusted_real_prob = 1.0 - adjusted_fake_prob
-
-            if adjusted_fake_prob > adjusted_real_prob:
-                label = "fake"
-                confidence = adjusted_fake_prob
+            spectral_anomaly = self._spectral_anomaly_score(spectral)
+            
+            # Anomaly Anchoring: If forensic signals are strong, they anchor the result floor
+            if spectral_anomaly > 0.4:
+                # Spectral anomalies are high-confidence synthetic signatures
+                adjusted_fake_prob = max(fake_prob, spectral_anomaly * 0.9)
+                logger.info("Audio Anomaly Anchor active: spectral_anomaly=%.2f anchoring fake_prob to %.4f", spectral_anomaly, adjusted_fake_prob)
             else:
-                label = "real"
-                confidence = adjusted_real_prob
-
-            logger.info("Audio result: label=%s, conf=%.4f (segments=%d)",
-                        label, confidence, len(segments))
-
-            # Cleanup
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
-            gc.collect()
+                adjusted_fake_prob = np.clip(fake_prob + spectral_anomaly * 0.1, 0.0, 1.0)
+            
+            label = "fake" if adjusted_fake_prob > 0.5 else "real"
+            confidence = adjusted_fake_prob if label == "fake" else 1.0 - adjusted_fake_prob
 
             # ── Build explainability reasons ──
             reasons = []
-
             if adjusted_fake_prob > 0.6:
-                reasons.append(BaseDetector._make_reason(
+                reasons.append(self._make_reason(
                     "synthetic_voice_detection",
                     "high" if adjusted_fake_prob > 0.8 else "medium",
                     f"Audio model detected synthetic voice patterns ({adjusted_fake_prob:.0%} confidence)",
                     f"Model: {self.model_name}",
                 ))
 
-            flatness = spectral.get("spectral_flatness", 0)
-            if flatness > 0.01:
-                reasons.append(BaseDetector._make_reason(
-                    "spectral_inconsistencies",
-                    "medium",
+            if spectral.get("spectral_flatness", 0) > 0.01:
+                reasons.append(self._make_reason(
+                    "spectral_inconsistencies", "medium",
                     "High spectral flatness indicates possible synthetic audio",
-                    f"Spectral flatness: {flatness:.6f} (threshold: 0.01)",
+                    f"Spectral flatness: {spectral.get('spectral_flatness'):.6f}"
                 ))
 
-            mfcc_std = spectral.get("mfcc_std", 10)
-            if mfcc_std < 5:
-                reasons.append(BaseDetector._make_reason(
-                    "uniform_mfcc",
-                    "medium",
-                    "Unusually consistent MFCC features — typical of synthetic audio",
-                    f"MFCC std: {mfcc_std:.4f} (natural speech: >5.0)",
-                ))
+            self._cleanup_gpu()
 
-            if len(segment_fake_probs) > 2:
-                seg_std = float(np.std(segment_fake_probs))
-                if seg_std > 0.2:
-                    reasons.append(BaseDetector._make_reason(
-                        "segment_inconsistency",
-                        "high",
-                        "High variance in audio segment analysis — possible splicing",
-                        f"Segment std: {seg_std:.4f}",
-                    ))
-
-            return {
-                "label": label,
-                "confidence": round(float(confidence), 4),
-                "fake_probability": round(float(adjusted_fake_prob), 4),
-                "real_probability": round(float(adjusted_real_prob), 4),
-                "segments": segments[:10],  # Cap segments in response
-                "spectral_features": spectral,
-                "num_segments_analyzed": len(segments),
-                "modality": "audio",
-                "explainability": {
-                    "reasons": reasons,
-                    "suspicious_indicators": [
-                        r["indicator"] for r in reasons
-                        if r.get("severity") in ("high", "critical")
-                    ],
-                },
-            }
+            return self._format_result(
+                label=label,
+                confidence=confidence,
+                fake_probability=adjusted_fake_prob,
+                reasons=reasons,
+                extra={
+                    "technical_signals": {
+                        "wav2vec2_fake_prob": round(float(fake_prob), 4),
+                        "spectral_anomaly": round(float(spectral_anomaly), 4),
+                        "num_segments": len(segments)
+                    }
+                }
+            )
 
         except Exception as e:
             logger.error("Audio detection error: %s", e)

@@ -1,41 +1,109 @@
-# ─── Python ──────────────────────────────
+# ─── Python & Virtual Environments ───
+.venv/
 venv/
-venv_new/
-__pycache__/
+env/
+ENV/
+bin/
+lib/
+include/
+share/
+pyvenv.cfg
 *.pyc
 *.pyo
+*.pyd
+__pycache__/
 *.egg-info/
 .eggs/
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.uv/
+.uv-cache/
+.uv-python/
 
-# ─── Backend ─────────────────────────────
-backend/.env
-backend/logs/
-data/processed/
-data/samples/
-logs/
-*.log
-*.bin
-
-# ─── ML / HuggingFace ───────────────────
-hf_cache/
-*.pt
-*.pth
-*.onnx
-
-# ─── FFmpeg ──────────────────────────────
-ffmpeg/
-
-# ─── Node / Next.js ─────────────────────
+# ─── Node.js & Frontend ───
 node_modules/
 .next/
 out/
+build/
+dist/
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
 
-# ─── IDE ─────────────────────────────────
+# ─── Truth_X Backend & Data ───
+backend/.env
+backend/.env.advanced
+backend/logs/
+logs/
+*.log
+data/processed/
+data/samples/
+data/downloads/
+data/uploads/
+data/temp/
+data/faiss/index.faiss
+data/faiss_metadata.pkl
+data/embeddings.npy
+celery_broker/out/
+celery_broker/processed/
+backend/tests/intel_smoke_results.json
+
+# ─── Media & Large Files ───
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.mp4
+*.mov
+*.avi
+*.webm
+*.mkv
+*.gif
+*.zip
+*.tar.gz
+*.7z
+*.bin
+*.pt
+*.pth
+*.onnx
+*.safetensors
+model.safetensors
+config.json
+preprocessor_config.json
+tokenizer.json
+tokenizer_config.json
+special_tokens_map.json
+
+# ─── Machine Learning Caches ───
+hf_cache/
+.cache/huggingface/
+.cache/torch/
+.cache/pip/
+
+# ─── Infrastructure & Tooling ───
+ffmpeg/
+.git-rewrite/
+.python-version
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ─── IDEs & Editors ───
 .vscode/
 .idea/
 *.swp
 *.swo
-
-# ─── OS ──────────────────────────────────
-.DS_Store
-Thumbs.db
+*.sublime-project
+*.sublime-workspace
+.project
+.pydevproject
+.settings/

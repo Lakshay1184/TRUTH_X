@@ -1,15 +1,15 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Shield,
+  ShieldCheck,
   AlertTriangle,
   CheckCircle,
   XCircle,
   ChevronLeft,
   Clock,
-  Eye,
   Cpu,
   Mic,
   Video,
@@ -18,11 +18,14 @@ import {
   Flag,
   Hash,
   TrendingDown,
-  Info,
-  ChevronDown,
-  ChevronUp,
   Download,
-  Share2
+  Share2,
+  Sparkles,
+  Globe,
+  ExternalLink,
+  Scale,
+  Fingerprint,
+  Network,
 } from "lucide-react";
 import {
   LineChart,
@@ -36,8 +39,12 @@ import {
   Area,
 } from "recharts";
 
+import { getVerificationKeyFindings } from "@/services/api";
+import { useToast } from "@/context/ToastContext";
+
 
 type Tab = "video" | "audio" | "text" | "image";
+type ViewTab = Tab | "osint";
 
 const mockResults: Record<Tab, {
   score: number;
@@ -200,6 +207,13 @@ const mockResults: Record<Tab, {
 
 const tabIcons: Record<Tab, typeof Video> = { video: Video, audio: Mic, text: FileText, image: ImageIcon };
 const tabColors: Record<Tab, string> = { video: "#00d4ff", audio: "#00ff9d", text: "#a855f7", image: "#ffd700" };
+const viewTabsBase: { id: Tab; label: string; icon: typeof Video; color: string }[] = [
+  { id: "video", label: "Video", icon: Video, color: "#00d4ff" },
+  { id: "audio", label: "Audio", icon: Mic, color: "#00ff9d" },
+  { id: "text", label: "Text", icon: FileText, color: "#a855f7" },
+  { id: "image", label: "Image", icon: ImageIcon, color: "#ffd700" },
+];
+const osintTab = { id: "osint" as const, label: "Source Verification", icon: ShieldCheck, color: "#00ff9d" };
 
 interface Props {
   tab: Tab;
@@ -212,26 +226,156 @@ interface Props {
 export default function ResultsDashboard({ tab, onReset, fileName, textSnippet, apiResult }: Props) {
 
   // When we have real API data, use it; otherwise fall back to mock
-  // Extract ML results from API
-  const videoML = apiResult?.video_analysis;
-  const audioML = apiResult?.audio_analysis;
-  const textML = apiResult?.text_analysis;
+  const videoML = apiResult?.video_result;
+  const audioML = apiResult?.audio_result;
+  const textML = apiResult?.text_result;
+  const imageML = apiResult?.image_result;
   const relatedArticles = apiResult?.related_articles || [];
-  const isRealModels = apiResult?.models_used === "real";
+  const newsVerification = apiResult?.news_verification || null;
+  const hasVerificationData = !!(
+    newsVerification ||
+    (relatedArticles && relatedArticles.length > 0) ||
+    apiResult?.social_graph
+  );
 
-  // Check if we have ANY real data (metadata OR ML results)
-  const hasMetadata = !!apiResult?.metadata && Object.keys(apiResult.metadata).length > 0;
-  const hasML = !!videoML || !!textML;
-  const hasRealData = hasMetadata || hasML || (apiResult?.score !== undefined);
+  const [activeViewTab, setActiveViewTab] = useState<ViewTab>(tab);
+  const resolvedViewTab: ViewTab = !hasVerificationData && activeViewTab === "osint" ? tab : activeViewTab;
+  const analysisTab: Tab = resolvedViewTab === "osint" ? tab : resolvedViewTab;
+  const viewTabs = hasVerificationData ? [...viewTabsBase, osintTab] : viewTabsBase;
+  const viewMeta = viewTabs.find((item) => item.id === resolvedViewTab) || viewTabsBase[0];
+
+  const hasRealData = !!apiResult;
   const realMeta = apiResult?.metadata || {};
   const realRisk = apiResult?.risk_assessment || {};
-  const realScore = apiResult?.score ?? null;
-  const realRiskLevel = apiResult?.risk_level ?? null;
-  const mock = mockResults[tab];
+  const realScore = apiResult?.score ?? realRisk?.authenticity_score ?? null;
+  const realRiskLevel = apiResult?.risk_level ?? realRisk?.risk_level ?? null;
+  const mock = mockResults[analysisTab];
+  const realModels = apiResult?.ai_models || [];
+  const timeline = hasRealData ? (apiResult?.timeline || []) : mock.timeline;
+  const processTime = apiResult?.processing_time_seconds;
+
+  const toPercent = (value?: number, digits = 0) => {
+    if (typeof value !== "number" || Number.isNaN(value)) return "N/A";
+    const normalized = value <= 1 ? value * 100 : value;
+    return `${normalized.toFixed(digits)}%`;
+  };
+
+  const formatTimestamp = (value?: string) => {
+    if (!value) return "";
+    const dt = new Date(value);
+    if (Number.isNaN(dt.getTime())) return value;
+    return dt.toLocaleString("en-IN", { dateStyle: "medium", timeStyle: "short" });
+  };
+
+  const rawKeyFindings = apiResult?.explainability?.key_findings;
+  const keyFindingsFromReport = Array.isArray(rawKeyFindings)
+    ? rawKeyFindings.filter((item: any) => typeof item === "string" && item.trim().length > 0)
+    : typeof rawKeyFindings === "string"
+      ? rawKeyFindings
+        .split("\n")
+        .map((item) => item.replace(/^[-•]\s*/, "").trim())
+        .filter((item) => item.length > 0)
+      : [];
+
+  const keyFindingsFromReasons = Array.isArray(apiResult?.explainability?.overall_reasons)
+    ? apiResult.explainability.overall_reasons
+      .map((reason: any) => reason.detail || reason.indicator)
+      .filter((item: any) => typeof item === "string" && item.trim().length > 0)
+      .slice(0, 6)
+    : [];
+
+  const keyFindings = keyFindingsFromReport.length > 0 ? keyFindingsFromReport : keyFindingsFromReasons;
+
+  const { showToast } = useToast();
+
+  const evidenceSources = Array.isArray(newsVerification?.sources) ? newsVerification.sources : [];
+  const getDomain = (url?: string) => {
+    if (!url) return "";
+    try {
+      return new URL(url).hostname.replace(/^www\./, "");
+    } catch {
+      return "";
+    }
+  };
+
+  const evidenceCards = [
+    ...relatedArticles.map((article: any) => {
+      const title = article?.title || article?.claim || article?.headline || "Untitled Source";
+      const url = article?.url || "";
+      const domain = getDomain(url) || article?.publisher || article?.source || "Unknown";
+      const verdict = String(article?.verdict || article?.relation || "").toLowerCase();
+      const stance = verdict.includes("contradict") || verdict.includes("false") || verdict.includes("misleading")
+        ? "contradicting"
+        : verdict.includes("support") || verdict.includes("true") || verdict.includes("verified")
+          ? "supporting"
+          : "informational";
+
+      return {
+        title,
+        url,
+        domain,
+        score: article?.similarity_score ?? article?.score ?? null,
+        timestamp: article?.published_at || article?.publishedAt || article?.date || article?.timestamp || "",
+        stance,
+      };
+    }),
+    ...evidenceSources.map((source: any) => ({
+      title: String(source),
+      url: "",
+      domain: String(source),
+      score: null,
+      timestamp: "",
+      stance: "informational",
+    })),
+  ];
+
+  const contradictions = Array.isArray(newsVerification?.contradictions) ? newsVerification.contradictions : [];
+  const provenance = apiResult?.credibility?.provenance || {};
+  const socialGraph = apiResult?.social_graph || null;
+
+  const [osintFindings, setOsintFindings] = useState<string[]>([]);
+  const [osintFindingsLoading, setOsintFindingsLoading] = useState(false);
+  const [osintFindingsSource, setOsintFindingsSource] = useState<"mistral" | "fallback" | null>(null);
+
+  useEffect(() => {
+    if (resolvedViewTab !== "osint" || !apiResult) return;
+
+    let isActive = true;
+    const run = async () => {
+      setOsintFindingsLoading(true);
+      try {
+        const response = await getVerificationKeyFindings(apiResult);
+        if (!isActive) return;
+        const findings = Array.isArray(response?.findings) ? response.findings : [];
+        if (findings.length > 0) {
+          setOsintFindings(findings);
+          setOsintFindingsSource(response?.source === "mistral" ? "mistral" : "fallback");
+          return;
+        }
+      } catch {
+        // fall back to local explainability
+      }
+      if (!isActive) return;
+      setOsintFindings(keyFindings);
+      setOsintFindingsSource("fallback");
+      setOsintFindingsLoading(false);
+    };
+
+    run().finally(() => {
+      if (isActive) setOsintFindingsLoading(false);
+    });
+
+    return () => {
+      isActive = false;
+    };
+  }, [apiResult, keyFindings, resolvedViewTab]);
 
   // Build comprehensive fingerprint from real metadata
   const buildFingerprint = () => {
     if (!hasRealData) return mock.fingerprint;
+    if (!realMeta || Object.keys(realMeta).length === 0) {
+      return [{ label: "Metadata", value: "Not available for this input", suspicious: false }];
+    }
     const fi = realMeta.file_info || {};
     const vid = realMeta.video || {};
     const aud = realMeta.audio || {};
@@ -296,28 +440,37 @@ export default function ResultsDashboard({ tab, onReset, fileName, textSnippet, 
 
   // Build status text from real data
   const buildStatus = () => {
-    // 1. Trust ML labels first
-    if (videoML && videoML.label && videoML.label !== "unknown") {
-      if (videoML.label === "fake") return "Deepfake Detected";
-      if (videoML.label === "real") return "Likely Authentic";
+    // Primary: use the standardized verdict from backend if available
+    if (apiResult?.verdict) return apiResult.verdict;
+
+    // Fallback: Trust ML labels for the active tab
+    if (analysisTab === "video" && videoML?.label && videoML.label !== "unknown") {
+      if (videoML.label === "fake") return "Likely AI Generated / Manipulated";
+      if (videoML.label === "real") return "Likely Authentic / Human";
     }
-    if (audioML && audioML.label && audioML.label !== "unknown") {
-      if (audioML.label === "fake") return "Synthetic Voice Detected";
-      if (audioML.label === "real") return "Likely Authentic Voice";
+    if (analysisTab === "audio" && audioML?.label && audioML.label !== "unknown") {
+      if (audioML.label === "fake") return "Likely AI Generated / Manipulated";
+      if (audioML.label === "real") return "Likely Authentic / Human";
     }
-    if (textML && textML.label && textML.label !== "unknown") {
-      if (textML.label === "ai-generated") return "AI-Generated Text";
-      if (textML.label === "human-written") return "Human-Written";
+    if (analysisTab === "text" && textML?.label && textML.label !== "unknown") {
+      if (textML.label === "ai-generated") return "Likely AI Generated / Manipulated";
+      if (textML.label === "human-written") return "Likely Authentic / Human";
+    }
+    if (analysisTab === "image" && imageML?.label && imageML.label !== "unknown") {
+      if (imageML.label === "ai-generated") return "Likely AI Generated / Manipulated";
+      if (imageML.label === "authentic") return "Likely Authentic / Human";
     }
 
-    // 2. Fallback to score-based status if ML didn't give a definitive label
+    // 2. Score-based interpretation fallback (Standardized Scale)
     if (hasRealData && realScore !== null) {
-      if (realScore >= 70) return "Likely Authentic";
-      if (realScore >= 40) return "Suspicious";
-      return "AI-Generated / Manipulated";
+      if (realScore <= 20) return "Likely AI Generated / Manipulated";
+      if (realScore <= 40) return "Suspicious / Potentially Synthetic";
+      if (realScore <= 60) return "Uncertain / Mixed Signals";
+      if (realScore <= 80) return "Likely Authentic / Human";
+      return "Strongly Authentic / Human";
     }
 
-    return mock.status;
+    return hasRealData ? "Analysis complete" : mock.status;
   };
 
   // Build anomalies from real flags + ML results
@@ -325,6 +478,9 @@ export default function ResultsDashboard({ tab, onReset, fileName, textSnippet, 
     const items: string[] = [];
     if (realRisk.flags && realRisk.flags.length > 0) {
       items.push(...realRisk.flags.map((f: any) => `${f.label}: ${f.detail}`));
+    }
+    if (apiResult?.credibility?.flags && apiResult.credibility.flags.length > 0) {
+      items.push(...apiResult.credibility.flags.map((f: any) => `${f.label}: ${f.detail}`));
     }
     if (videoML && videoML.label === "fake" && !items.some(i => i.includes("Deepfake"))) {
       items.push(`Deepfake Detected: ML model confidence ${(videoML.confidence * 100).toFixed(1)}%`);
@@ -366,6 +522,13 @@ export default function ResultsDashboard({ tab, onReset, fileName, textSnippet, 
         items.push(`The audio analysis indicates the speech is likely authentic with ${(audioML.confidence * 100).toFixed(1)}% confidence.`);
       }
     }
+    if (imageML && imageML.label && imageML.label !== "unknown") {
+      if (imageML.label === "ai-generated") {
+        items.push(`The image detector classified this image as AI-generated with ${(imageML.confidence * 100).toFixed(1)}% confidence.`);
+      } else {
+        items.push(`The image detector classified this image as authentic with ${(imageML.confidence * 100).toFixed(1)}% confidence.`);
+      }
+    }
     if (relatedArticles.length > 0) {
       const top = relatedArticles[0];
       items.push(`Found ${relatedArticles.length} related fact-check article(s). Top match: "${top.title || "Untitled"}" (similarity: ${((top.similarity_score || 0) * 100).toFixed(0)}%).`);
@@ -389,38 +552,42 @@ export default function ResultsDashboard({ tab, onReset, fileName, textSnippet, 
   // Merge real data over mock data
   const result = {
     ...mock,
-    score: realScore ?? mock.score,
-    risk: (realRiskLevel ?? mock.risk) as "low" | "medium" | "high",
+    score: realScore ?? (hasRealData ? 0 : mock.score),
+    risk: (realRiskLevel ?? (hasRealData ? "medium" : mock.risk)) as "low" | "medium" | "high",
     status: buildStatus(),
-    confidence: realRisk.authenticity_score ?? mock.confidence,
+    confidence: realScore ?? realRisk.authenticity_score ?? (hasRealData ? 0 : mock.confidence),
     fingerprint: buildFingerprint(),
     anomalies: buildAnomalies(),
     insights: buildInsights(),
     // Use real drift data from API when available
     driftData: apiResult?.drift_data && apiResult.drift_data.length > 0
       ? apiResult.drift_data
-      : mock.driftData,
+      : hasRealData
+        ? []
+        : mock.driftData,
   };
   const Icon = tabIcons[tab];
   const color = tabColors[tab];
   const [expandedSection, setExpandedSection] = useState<string | null>("anomalies");
 
-  const riskConfig = {
-    low: { color: "#00ff9d", bg: "rgba(0, 255, 157, 0.1)", border: "rgba(0, 255, 157, 0.2)", label: "LOW RISK" },
-    medium: { color: "#ffd700", bg: "rgba(255, 215, 0, 0.1)", border: "rgba(255, 215, 0, 0.2)", label: "MEDIUM RISK" },
-    high: { color: "#ff4444", bg: "rgba(255, 68, 68, 0.1)", border: "rgba(255, 68, 68, 0.2)", label: "HIGH RISK" },
-  }[result.risk];
+  const riskConfig = (() => {
+    if (result.score <= 20) return { color: "#ff4444", bg: "rgba(255, 68, 68, 0.1)", border: "rgba(255, 68, 68, 0.2)", label: "HIGH RISK" };
+    if (result.score <= 40) return { color: "#ff8c00", bg: "rgba(255, 140, 0, 0.1)", border: "rgba(255, 140, 0, 0.2)", label: "MODERATE RISK" };
+    if (result.score <= 60) return { color: "#ffd700", bg: "rgba(255, 215, 0, 0.1)", border: "rgba(255, 215, 0, 0.2)", label: "UNCERTAIN" };
+    if (result.score <= 80) return { color: "#98fb98", bg: "rgba(152, 251, 152, 0.1)", border: "rgba(152, 251, 152, 0.2)", label: "LOW RISK" };
+    return { color: "#00ff9d", bg: "rgba(0, 255, 157, 0.1)", border: "rgba(0, 255, 157, 0.2)", label: "MINIMAL RISK" };
+  })();
 
   const statusIcon =
-    result.score >= 75 ? (
-      <CheckCircle className="w-6 h-6" style={{ color: "#00ff9d" }} />
-    ) : result.score >= 45 ? (
-      <AlertTriangle className="w-6 h-6" style={{ color: "#ffd700" }} />
+    result.score >= 61 ? (
+      <CheckCircle className="w-6 h-6" style={{ color: riskConfig.color }} />
+    ) : result.score >= 21 ? (
+      <AlertTriangle className="w-6 h-6" style={{ color: riskConfig.color }} />
     ) : (
-      <XCircle className="w-6 h-6" style={{ color: "#ff4444" }} />
+      <XCircle className="w-6 h-6" style={{ color: riskConfig.color }} />
     );
 
-  const scoreColor = result.score >= 75 ? "#00ff9d" : result.score >= 45 ? "#ffd700" : "#ff4444";
+  const scoreColor = riskConfig.color;
 
   const toggleSection = (s: string) => setExpandedSection(expandedSection === s ? null : s);
 
@@ -494,7 +661,7 @@ export default function ResultsDashboard({ tab, onReset, fileName, textSnippet, 
                   await navigator.clipboard.writeText(
                     `${shareData.title}\n${shareData.text}\n${shareData.url}`
                   );
-                  alert("Report summary copied to clipboard!");
+                  showToast("Report summary copied to clipboard!", "success");
                 }
               } catch (err) {
                 // user cancelled share dialog
@@ -528,12 +695,344 @@ export default function ResultsDashboard({ tab, onReset, fileName, textSnippet, 
         </div>
       </motion.div>
 
+      {/* View Tabs */}
       <motion.div
-        variants={containerVars}
-        initial="hidden"
-        animate="show"
-        className="grid grid-cols-1 lg:grid-cols-3 gap-6"
+        initial={{ opacity: 0, y: -10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.1 }}
+        className="glass-card rounded-2xl p-2 mb-8 flex flex-wrap gap-2"
       >
+        {viewTabs.map((item) => {
+          const IconEl = item.icon;
+          const isActive = resolvedViewTab === item.id;
+          return (
+            <button
+              key={item.id}
+              onClick={() => setActiveViewTab(item.id)}
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
+                isActive
+                  ? "bg-white/10 text-white shadow-lg"
+                  : "text-slate-400 hover:text-white"
+              }`}
+              style={isActive ? { boxShadow: `0 0 20px ${item.color}30`, border: `1px solid ${item.color}30` } : { border: "1px solid transparent" }}
+            >
+              <IconEl className="w-4 h-4" style={{ color: item.color }} />
+              <span>{item.label}</span>
+            </button>
+          );
+        })}
+      </motion.div>
+
+      {resolvedViewTab === "osint" ? (
+        <motion.div
+          variants={containerVars}
+          initial="hidden"
+          animate="show"
+          className="space-y-6"
+        >
+          {/* Executive Intelligence Summary */}
+          <motion.div variants={itemVars} className="glass-card rounded-3xl p-8 relative overflow-hidden">
+            <div
+              className="absolute inset-0 opacity-10 pointer-events-none blur-[120px]"
+              style={{ background: "radial-gradient(circle at top, #00d4ff 0%, transparent 55%)" }}
+            />
+            <div className="relative z-10">
+              <div className="flex items-center justify-between gap-6 flex-wrap">
+                <div className="flex items-center gap-3">
+                  <div className="p-3 rounded-xl bg-cyan-500/10 text-cyan-400">
+                    <ShieldCheck className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-white font-bold text-2xl">Executive Source Summary</h3>
+                    <p className="text-slate-400 text-sm">Source verification overview • forensic-grade verdict</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="text-[10px] px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-300 font-mono">
+                    Credibility Score: {typeof apiResult?.credibility?.score === "number" ? `${apiResult.credibility.score}/100` : "N/A"}
+                  </span>
+                  <span className="text-[10px] px-3 py-1 rounded-full bg-cyan-500/10 text-cyan-300 font-mono">
+                    Confidence: {toPercent(typeof apiResult?.combined_confidence === "number" ? apiResult.combined_confidence : typeof apiResult?.combined_fake_probability === "number" ? Math.abs(apiResult.combined_fake_probability - 0.5) * 2 : undefined)}
+                  </span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-8">
+                <div className="lg:col-span-2 space-y-4">
+                  <div className="flex items-center gap-2 text-xs uppercase tracking-widest text-cyan-300/80">
+                    Source Overview
+                  </div>
+                  <p className="text-slate-200 leading-relaxed text-base">
+                    {apiResult?.explainability?.intelligence_report || "No source report available for this analysis."}
+                  </p>
+                </div>
+                <div className="space-y-4">
+                  <div className="bg-black/20 rounded-2xl border border-white/5 p-4">
+                    <div className="text-xs text-slate-400">Source Credibility Status</div>
+                    <div className="text-lg font-bold text-white mt-1">
+                      {apiResult?.news_verification?.verdict || "Unverified"}
+                    </div>
+                    <div className="text-[11px] text-slate-500 mt-1 capitalize">
+                      Evidence Strength: {apiResult?.news_verification?.confidence_level || "Medium"}
+                    </div>
+                  </div>
+                  <div className="bg-black/20 rounded-2xl border border-white/5 p-4">
+                    <div className="text-xs text-slate-400">Evidence Signals</div>
+                    <div className="text-sm text-slate-200 mt-1">
+                      {apiResult?.news_verification?.evidence_summary || "No external evidence summary reported."}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </motion.div>
+
+          {/* Key Findings */}
+          <motion.div variants={itemVars} className="glass-card rounded-3xl p-6">
+            <div className="flex items-center justify-between gap-4 mb-6">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-400">
+                  <Sparkles className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-white">Key Findings</h4>
+                  <p className="text-xs text-slate-400">AI-generated investigative findings grounded in detector evidence</p>
+                </div>
+              </div>
+              <span className="text-[10px] px-2 py-1 rounded bg-emerald-500/10 text-emerald-300 font-mono">
+                {osintFindingsSource === "mistral" ? "MISTRAL VERIFIED" : "DETERMINISTIC"}
+              </span>
+            </div>
+
+            <div className="space-y-3">
+              {osintFindingsLoading && osintFindings.length === 0 && (
+                <p className="text-xs text-slate-400">Generating intelligence findings...</p>
+              )}
+              {!osintFindingsLoading && osintFindings.length === 0 && (
+                <p className="text-xs text-slate-400">No key findings reported for this analysis.</p>
+              )}
+              {osintFindings.map((finding, i) => (
+                <div key={i} className="flex items-start gap-3 p-3 rounded-xl bg-white/5 border border-white/5 hover:border-emerald-500/30 transition-colors">
+                  <div className="w-2 h-2 rounded-full bg-emerald-400 mt-2" />
+                  <p className="text-slate-200 text-sm leading-relaxed">{finding}</p>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+
+          {/* Sources & Evidence */}
+          <motion.div variants={itemVars} className="glass-card rounded-3xl p-6">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <div className="p-2 rounded-lg bg-cyan-500/10 text-cyan-400">
+                  <Globe className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-white">Sources & Evidence</h4>
+                  <p className="text-xs text-slate-400">Verification sources and evidence alignment</p>
+                </div>
+              </div>
+              <span className="text-[10px] px-2 py-1 rounded bg-cyan-500/10 text-cyan-300 font-mono">
+                {evidenceCards.length} sources
+              </span>
+            </div>
+
+            {evidenceCards.length === 0 && (
+              <p className="text-xs text-slate-400">No evidence sources reported yet.</p>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+              {evidenceCards.map((source, i) => {
+                const stanceColor = source.stance === "supporting" ? "#00ff9d" : source.stance === "contradicting" ? "#ff6b6b" : "#38bdf8";
+                return (
+                  <div key={`${source.title}-${i}`} className="glass-card rounded-2xl p-4 border border-white/5 hover:border-white/20 transition-colors">
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <h5 className="text-white text-sm font-semibold leading-snug line-clamp-2">{source.title}</h5>
+                        <p className="text-xs text-slate-400 mt-1">{source.domain}</p>
+                      </div>
+                      <div className="w-10 h-10 rounded-xl bg-white/5 border border-white/5 flex items-center justify-center">
+                        <Globe className="w-5 h-5" style={{ color: stanceColor }} />
+                      </div>
+                    </div>
+
+                    <div className="mt-4 space-y-2">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-slate-400">Relevance</span>
+                        <span className="font-mono" style={{ color: stanceColor }}>
+                          {typeof source.score === "number" ? `${Math.round(source.score * 100)}%` : "N/A"}
+                        </span>
+                      </div>
+                      <div className="h-1.5 w-full bg-white/5 rounded-full overflow-hidden">
+                        <div
+                          className="h-full rounded-full"
+                          style={{ width: `${Math.round((source.score ?? 0) * 100)}%`, background: stanceColor }}
+                        />
+                      </div>
+                      {source.timestamp && (
+                        <div className="text-[11px] text-slate-500">{formatTimestamp(source.timestamp)}</div>
+                      )}
+                    </div>
+
+                    <div className="mt-4 flex items-center justify-between">
+                      <span className="text-[10px] px-2 py-1 rounded-full" style={{ background: `${stanceColor}1A`, color: stanceColor }}>
+                        {source.stance === "supporting" ? "SUPPORTING" : source.stance === "contradicting" ? "CONTRADICTS" : "INFORMATIONAL"}
+                      </span>
+                      {source.url ? (
+                        <a
+                          href={source.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="text-[11px] text-cyan-300 hover:text-cyan-100 flex items-center gap-1"
+                        >
+                          View Source <ExternalLink className="w-3 h-3" />
+                        </a>
+                      ) : (
+                        <span className="text-[11px] text-slate-500">No link</span>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </motion.div>
+
+          {/* Claim Integrity */}
+          <motion.div variants={itemVars} className="glass-card rounded-3xl p-6">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="p-2 rounded-lg bg-emerald-500/10 text-emerald-400">
+                <Scale className="w-5 h-5" />
+              </div>
+              <div>
+                <h4 className="font-bold text-white">Claim Integrity</h4>
+                <p className="text-xs text-slate-400">Claim vs evidence comparison</p>
+              </div>
+            </div>
+
+            {contradictions.length === 0 && (
+              <p className="text-xs text-slate-400">No claim integrity data reported.</p>
+            )}
+
+            <div className="space-y-4">
+              {contradictions.map((item: any, i: number) => {
+                const relation = String(item?.relation || "neutral").toLowerCase();
+                const relationColor = relation === "entailment" ? "#00ff9d" : relation === "contradiction" ? "#ff6b6b" : "#38bdf8";
+                return (
+                  <div key={i} className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                    <div className="bg-black/20 rounded-2xl border border-white/5 p-4">
+                      <div className="text-[11px] uppercase tracking-widest text-slate-500">Claim</div>
+                      <p className="text-sm text-white mt-2 leading-relaxed">{item.claim}</p>
+                    </div>
+                    <div className="bg-black/20 rounded-2xl border border-white/5 p-4">
+                      <div className="flex items-center justify-between">
+                        <span className="text-[11px] uppercase tracking-widest text-slate-500">Counter-Evidence</span>
+                        <span className="text-[10px] px-2 py-1 rounded-full" style={{ background: `${relationColor}1A`, color: relationColor }}>
+                          {relation === "entailment" ? "SUPPORTED" : relation === "contradiction" ? "CONTRADICTED" : "INCONCLUSIVE"}
+                        </span>
+                      </div>
+                      <p className="text-sm text-slate-200 mt-2 leading-relaxed">{item.evidence}</p>
+                      <div className="mt-3 flex items-center justify-between text-[11px] text-slate-500">
+                        <span>{item.source || "Unknown"}</span>
+                        <span className="font-mono" style={{ color: relationColor }}>
+                          {typeof item.confidence === "number" ? `${Math.round(item.confidence * 100)}%` : "N/A"}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </motion.div>
+
+          {/* Provenance & Spread */}
+          <motion.div variants={itemVars} className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-2 glass-card rounded-3xl p-6 relative overflow-hidden">
+              <div
+                className="absolute inset-0 opacity-10 pointer-events-none"
+                style={{ background: "radial-gradient(circle at right, #38bdf8 0%, transparent 60%)" }}
+              />
+              <div className="relative z-10">
+                <div className="flex items-center gap-3 mb-6">
+                  <div className="p-2 rounded-lg bg-cyan-500/10 text-cyan-400">
+                    <Fingerprint className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h4 className="font-bold text-white">Digital Passport</h4>
+                    <p className="text-xs text-slate-400">Provenance attribution & manipulation fingerprint</p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="bg-black/20 rounded-2xl border border-white/5 p-4">
+                    <div className="text-xs text-slate-400">Likely Origin</div>
+                    <div className="text-sm text-white font-semibold mt-2">{provenance?.likely_origin || "Unknown"}</div>
+                  </div>
+                  <div className="bg-black/20 rounded-2xl border border-white/5 p-4">
+                    <div className="text-xs text-slate-400">Manipulation Category</div>
+                    <div className="text-sm text-white font-semibold mt-2">{provenance?.manipulation_type || "None detected"}</div>
+                  </div>
+                  <div className="bg-black/20 rounded-2xl border border-white/5 p-4">
+                    <div className="text-xs text-slate-400">Confidence Level</div>
+                    <div className="text-sm text-emerald-300 font-semibold mt-2">
+                      {typeof provenance?.confidence === "number" ? `${Math.round(provenance.confidence * 100)}%` : "N/A"}
+                    </div>
+                  </div>
+                  <div className="bg-black/20 rounded-2xl border border-white/5 p-4">
+                    <div className="text-xs text-slate-400">Artifact Signatures</div>
+                    <div className="text-sm text-slate-200 mt-2">
+                      {Array.isArray(provenance?.signals) && provenance.signals.length > 0
+                        ? provenance.signals.slice(0, 3).join(" • ")
+                        : "No signature indicators detected"}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="glass-card rounded-3xl p-6">
+              <div className="flex items-center gap-3 mb-6">
+                <div className="p-2 rounded-lg bg-rose-500/10 text-rose-400">
+                  <Network className="w-5 h-5" />
+                </div>
+                <div>
+                  <h4 className="font-bold text-white">Propagation Graph</h4>
+                  <p className="text-xs text-slate-400">Spread intelligence snapshot</p>
+                </div>
+              </div>
+
+              {!socialGraph && (
+                <div className="text-xs text-slate-400">No social propagation data available.</div>
+              )}
+
+              {socialGraph && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-slate-400">Nodes</span>
+                    <span className="text-white font-semibold">{socialGraph?.nodes?.length ?? socialGraph?.node_count ?? "N/A"}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-slate-400">Connections</span>
+                    <span className="text-white font-semibold">{socialGraph?.edges?.length ?? socialGraph?.edge_count ?? "N/A"}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-slate-400">Virality</span>
+                    <span className="text-rose-300 font-semibold">{socialGraph?.virality_score ?? "N/A"}</span>
+                  </div>
+                  <div className="h-24 rounded-2xl bg-gradient-to-br from-white/5 to-white/0 border border-white/5 flex items-center justify-center text-[11px] text-slate-500">
+                    Network visualization placeholder
+                  </div>
+                </div>
+              )}
+            </div>
+          </motion.div>
+        </motion.div>
+      ) : (
+        <motion.div
+          variants={containerVars}
+          initial="hidden"
+          animate="show"
+          className="grid grid-cols-1 lg:grid-cols-3 gap-6"
+        >
 
         {/* Main Score Card - Full Width on Mobile, 2 Cols on Desktop */}
         <motion.div variants={itemVars} className="lg:col-span-2 glass-card rounded-3xl p-8 relative overflow-hidden">
@@ -604,7 +1103,9 @@ export default function ResultsDashboard({ tab, onReset, fileName, textSnippet, 
                 </div>
                 <div className="bg-black/20 rounded-xl p-3 border border-white/5">
                   <div className="text-slate-400 text-xs mb-1">Process Time</div>
-                  <div className="text-xl font-bold text-white">2.4s</div>
+                  <div className="text-xl font-bold text-white">
+                    {typeof processTime === "number" ? `${processTime}s` : "N/A"}
+                  </div>
                 </div>
               </div>
             </div>
@@ -629,6 +1130,9 @@ export default function ResultsDashboard({ tab, onReset, fileName, textSnippet, 
                   <p className="text-slate-300 leading-relaxed">{insight}</p>
                 </div>
               ))}
+              {result.insights.length === 0 && (
+                <p className="text-xs text-slate-400">No insights available for this input.</p>
+              )}
             </div>
           </div>
 
@@ -642,11 +1146,11 @@ export default function ResultsDashboard({ tab, onReset, fileName, textSnippet, 
             </div>
 
             <div className="space-y-4">
-              {[
+              {(hasRealData ? realModels : [
                 { name: "FaceForensics++", score: 94 },
                 { name: "DeepFakeDetector", score: 91 },
                 { name: "AudioDeepDetect", score: 88 }
-              ].map((model, i) => (
+              ]).map((model: any, i: number) => (
                 <div key={i} className="space-y-2">
                   <div className="flex justify-between text-sm">
                     <span className="text-slate-300">{model.name}</span>
@@ -662,6 +1166,9 @@ export default function ResultsDashboard({ tab, onReset, fileName, textSnippet, 
                   </div>
                 </div>
               ))}
+              {hasRealData && realModels.length === 0 && (
+                <p className="text-xs text-slate-400">No model metadata reported.</p>
+              )}
             </div>
           </div>
 
@@ -673,8 +1180,8 @@ export default function ResultsDashboard({ tab, onReset, fileName, textSnippet, 
                   <Hash className="w-5 h-5" />
                 </div>
                 <div>
-                  <h4 className="font-bold text-white">{hasRealData ? "Video Metadata" : "Digital Fingerprint"}</h4>
-                  {hasRealData && <p className="text-[10px] text-emerald-400 font-mono mt-0.5">● LIVE — extracted via FFprobe</p>}
+                  <h4 className="font-bold text-white">{hasRealData ? "Media Metadata" : "Digital Fingerprint"}</h4>
+                  {hasRealData && <p className="text-[10px] text-emerald-400 font-mono mt-0.5">● LIVE — extracted from the file</p>}
                 </div>
               </div>
               {hasRealData && (
@@ -733,6 +1240,9 @@ export default function ResultsDashboard({ tab, onReset, fileName, textSnippet, 
                   <p className="text-slate-300 text-sm group-hover:text-white transition-colors">{anomaly}</p>
                 </div>
               ))}
+              {result.anomalies.length === 0 && (
+                <p className="text-xs text-slate-400">No anomalies detected for this input.</p>
+              )}
             </div>
           </motion.div>
 
@@ -744,7 +1254,7 @@ export default function ResultsDashboard({ tab, onReset, fileName, textSnippet, 
             </div>
 
             <div className="relative pl-4 space-y-6 before:absolute before:left-0 before:top-2 before:bottom-2 before:w-px before:bg-gradient-to-b before:from-cyan-500 before:to-transparent">
-              {result.timeline.slice(0, 4).map((item, i) => (
+              {timeline.slice(0, 4).map((item: any, i: number) => (
                 <div key={i} className="relative">
                   <div className={`absolute -left-[21px] top-1 w-3 h-3 rounded-full border-2 border-[#000000] ${item.suspicious ? "bg-red-500" : "bg-cyan-500"}`} />
                   <div className="flex justify-between items-start">
@@ -759,6 +1269,9 @@ export default function ResultsDashboard({ tab, onReset, fileName, textSnippet, 
                   </div>
                 </div>
               ))}
+              {timeline.length === 0 && (
+                <p className="text-xs text-slate-400">Timeline analysis is not available for this input.</p>
+              )}
             </div>
           </motion.div>
 
@@ -786,8 +1299,14 @@ export default function ResultsDashboard({ tab, onReset, fileName, textSnippet, 
           </div>
 
           <div className="h-[200px] w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={result.driftData}>
+            {result.driftData.length === 0 && (
+              <div className="h-full flex items-center justify-center text-xs text-slate-400">
+                No drift data available for this input.
+              </div>
+            )}
+            {result.driftData.length > 0 && (
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={result.driftData}>
                 <defs>
                   <linearGradient id="colorAuth" x1="0" y1="0" x2="0" y2="1">
                     <stop offset="5%" stopColor={scoreColor} stopOpacity={0.3} />
@@ -803,11 +1322,13 @@ export default function ResultsDashboard({ tab, onReset, fileName, textSnippet, 
                 />
                 <Area type="monotone" dataKey="v" stroke={scoreColor} strokeWidth={3} fillOpacity={1} fill="url(#colorAuth)" />
               </AreaChart>
-            </ResponsiveContainer>
+              </ResponsiveContainer>
+            )}
           </div>
         </motion.div>
 
-      </motion.div>
+        </motion.div>
+      )}
     </div>
   );
 }

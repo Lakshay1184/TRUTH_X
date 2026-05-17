@@ -24,10 +24,9 @@ class MistralReasoner:
         Returns:
             A well-structured paragraph explaining the authenticity or manipulation of the media.
         """
-        # If no significant signals, return generic safe response
         has_signals = any(len(s) > 0 for s in signals.values() if isinstance(s, list))
         if not has_signals:
-            return "No suspicious manipulation indicators were detected across analyzed modalities. The content appears consistent with natural media."
+            return ""
 
         messages = [
             {
@@ -54,3 +53,50 @@ class MistralReasoner:
             logger.warning("Mistral report generation failed: %s", e)
 
         return ""
+
+    def generate_key_findings(self, signals: Dict[str, Any], max_items: int = 6) -> List[str]:
+        """Generate concise, evidence-grounded key findings.
+
+        Returns a list of short, single-sentence findings grounded in signals.
+        """
+        has_signals = any(
+            bool(value)
+            for value in signals.values()
+            if isinstance(value, (list, dict, str))
+        )
+        if not has_signals:
+            return []
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are the Lead Intelligence Analyst for Truth_X. "
+                    "Generate concise investigative findings grounded ONLY in the provided signals. "
+                    "Return JSON with key 'findings' as an array of strings. "
+                    "Each finding must be a single short sentence, max 16 words, no generic filler. "
+                    "If the signals are insufficient, return an empty array."
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"SIGNALS:\n{json.dumps(signals, indent=2)}",
+            },
+        ]
+
+        try:
+            response = run_mistral_chat(messages, temperature=0.2, response_format={"type": "json_object"})
+            if response:
+                data = json.loads(response)
+                findings = data.get("findings", [])
+                if isinstance(findings, list):
+                    cleaned = [
+                        str(item).strip()
+                        for item in findings
+                        if isinstance(item, str) and item.strip()
+                    ]
+                    return cleaned[:max_items]
+        except Exception as e:
+            logger.warning("Mistral key findings generation failed: %s", e)
+
+        return []

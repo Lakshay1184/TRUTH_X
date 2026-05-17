@@ -3,14 +3,14 @@
 import { useState, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import ResultsDashboard from "@/components/ResultsDashboard";
-import { analyzeContent, checkBackendHealth, getBackendStatus } from "@/services/api";
+import { analyzeContent, checkBackendHealth } from "@/services/api";
+import { useToast } from "@/context/ToastContext";
 import {
   Upload,
   Video,
   Mic,
   FileText,
   Image,
-  Link as LinkIcon,
   X,
   Play,
   Shield,
@@ -25,21 +25,9 @@ type Stage = "idle" | "uploading" | "scanning" | "results";
 const tabs: { id: Tab; label: string; icon: typeof Video; accept: string; color: string }[] = [
   { id: "video", label: "Video", icon: Video, accept: "video/*", color: "#00d4ff" },
   { id: "audio", label: "Audio", icon: Mic, accept: "audio/*", color: "#00ff9d" },
-  { id: "text", label: "Text / Article", icon: FileText, accept: ".txt,.pdf,.doc", color: "#a855f7" },
+  { id: "text", label: "Text / Article", icon: FileText, accept: ".txt,.pdf,.docx", color: "#a855f7" },
   { id: "image", label: "Image", icon: Image, accept: "image/*", color: "#ffd700" },
 ];
-
-const scanMessages = [
-  "Initializing neural analysis engine...",
-  "Extracting metadata fingerprints...",
-  "Running deepfake detection model...",
-  "Analyzing frequency anomalies...",
-  "Cross-referencing content database...",
-  "Generating authenticity score...",
-  "Compiling forensic report...",
-];
-
-
 
 export default function AnalyzePage() {
   const [activeTab, setActiveTab] = useState<Tab>("video");
@@ -47,15 +35,12 @@ export default function AnalyzePage() {
   const [dragOver, setDragOver] = useState(false);
   const [uploadedFile, setUploadedFile] = useState<File | null>(null);
   const [textInput, setTextInput] = useState("");
-  const [urlInput, setUrlInput] = useState("");
   const [scanStep, setScanStep] = useState(0);
   const [scanProgress, setScanProgress] = useState(0);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [apiResult, setApiResult] = useState<any>(null);
   const [currentScanMessage, setCurrentScanMessage] = useState("Initializing analysis...");
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -69,8 +54,10 @@ export default function AnalyzePage() {
     if (file) setUploadedFile(file);
   };
 
+  const { showToast } = useToast();
+
   const analyzeFile = async () => {
-    if (!uploadedFile && !textInput.trim() && !urlInput.trim()) return;
+    if (!uploadedFile && !textInput.trim()) return;
 
     setStage("uploading");
     setUploadProgress(0);
@@ -78,7 +65,7 @@ export default function AnalyzePage() {
     // Check health first
     const isBackendUp = await checkBackendHealth();
     if (!isBackendUp) {
-      alert("Backend API is not running at http://localhost:8000. Please start the server.");
+      showToast("Backend API is not running at http://localhost:8000. Please start the server.", "error");
       setStage("idle");
       return;
     }
@@ -99,40 +86,39 @@ export default function AnalyzePage() {
   const startRealAnalysis = async () => {
     setScanProgress(0);
     setScanStep(0);
-    setCurrentScanMessage("Starting neural scan...");
-
-    // Start polling status in the background
-    const statusInterval = setInterval(async () => {
-      const status = await getBackendStatus();
-      setCurrentScanMessage(status);
-
-      // Artificial progress smoothing
-      setScanProgress((p) => {
-        if (p >= 95) return p; // Wait at 95% for actual result
-        return p + (p < 50 ? 5 : 2);
-      });
-    }, 1000);
+    setCurrentScanMessage("Submitting analysis job...");
 
     try {
-      const query = textInput || urlInput;
-      // The actual long-running request — now polls server in background
-      const result = await analyzeContent(uploadedFile, query, (msg) => {
-        setCurrentScanMessage(msg);
+      const query = textInput;
+      const fileField = activeTab === "text"
+        ? "text_file"
+        : activeTab === "audio"
+          ? "audio"
+          : activeTab === "image"
+            ? "image"
+            : "video";
+
+      // The actual long-running request — polls server in background
+      const result = await analyzeContent(uploadedFile, query, {
+        fileField,
+        verifyNews: false, // Core detection only
+        onStatus: (msg) => setCurrentScanMessage(msg),
+        onProgress: (progress) => {
+          setScanProgress((prev) => Math.max(prev, Math.min(100, progress)));
+        },
       });
 
       console.log("Analysis Result:", result);
-      clearInterval(statusInterval);
       setScanProgress(100);
       setApiResult(result);
       setTimeout(() => setStage("results"), 500);
 
     } catch (error: any) {
-      clearInterval(statusInterval);
       console.error("Analysis failed:", error);
 
       // Provide more helpful error feedback
-      const errorMsg = error.message || "Unknown error occurred";
-      alert(`Analysis failed: ${errorMsg}\n\nPlease check if the file is too large or if the backend is stable.`);
+      const errorMsg = error?.message || "Unknown error occurred";
+      showToast(`Analysis failed: ${errorMsg}. Check backend or file size.`, "error");
       setStage("idle");
     }
   };
@@ -142,7 +128,6 @@ export default function AnalyzePage() {
     setApiResult(null);
     setUploadedFile(null);
     setTextInput("");
-    setUrlInput("");
     setScanProgress(0);
     setScanStep(0);
   };
@@ -164,7 +149,7 @@ export default function AnalyzePage() {
           </div>
           <h1 className="text-4xl font-black text-white mb-2">Analyze Content</h1>
           <p className="text-[#777777]">
-            Upload a file, paste text, or enter a URL to check for AI manipulation, deepfakes, or misinformation.
+            Upload a file or paste text to check for AI manipulation, deepfakes, or synthetic patterns.
           </p>
         </motion.div>
 
@@ -312,7 +297,7 @@ export default function AnalyzePage() {
                       className="text-xs px-3 py-1.5 rounded-full border"
                       style={{ color: activeTabData.color, borderColor: `${activeTabData.color}30`, background: `${activeTabData.color}10` }}
                     >
-                      Max 500MB — Analyzed securely, deleted after scan
+                      Max 10MB — Analyzed securely, deleted after scan
                     </span>
                   </div>
                 )}
@@ -342,39 +327,39 @@ export default function AnalyzePage() {
                     )}
                   </div>
                 </div>
+
+                <div className="glass rounded-xl overflow-hidden">
+                  <div className="px-4 py-3 border-b border-[#222222] flex items-center gap-2">
+                    <Upload className="w-4 h-4 text-[#a855f7]" />
+                    <span className="text-[#b0b0b0] text-sm font-medium">Upload Text File</span>
+                    <span className="text-xs text-[#777777]">(.txt, .pdf, .docx)</span>
+                  </div>
+                  <div className="p-4 space-y-3">
+                    <input
+                      type="file"
+                      accept=".txt,.pdf,.docx"
+                      onChange={handleFileChange}
+                      className="block w-full text-sm text-[#b0b0b0] file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-semibold file:bg-[#1a1a1a] file:text-[#e0e0e0] hover:file:bg-[#222222]"
+                    />
+                    {uploadedFile && (
+                      <div className="flex items-center justify-between text-xs text-[#777777]">
+                        <span>{uploadedFile.name}</span>
+                        <button onClick={() => setUploadedFile(null)} className="text-[#ff4444] hover:text-red-300">
+                          Remove
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
             )}
-
-            {/* URL input */}
-            <div className="glass rounded-xl p-4">
-              <div className="flex items-center gap-2 mb-3">
-                <LinkIcon className="w-4 h-4 text-[#b0b0b0]" />
-                <span className="text-[#b0b0b0] text-sm font-medium">Verify by URL</span>
-                <span className="text-xs text-[#777777]">(articles, social posts, news links)</span>
-              </div>
-              <div className="flex gap-2">
-                <input
-                  type="url"
-                  value={urlInput}
-                  onChange={(e) => setUrlInput(e.target.value)}
-                  placeholder="https://example.com/article-to-verify"
-                  className="flex-1 bg-[#0a0a0a] border border-[#222222] rounded-lg px-4 py-2.5 text-[#e0e0e0] placeholder-[#444444] text-sm outline-none focus:border-[#00d4ff]/50"
-                />
-                <button
-                  disabled={!urlInput}
-                  className="px-4 py-2.5 rounded-lg bg-[#1a1a1a] border border-[#222222] text-[#b0b0b0] text-sm hover:border-[#00d4ff]/30 disabled:opacity-40"
-                >
-                  Load
-                </button>
-              </div>
-            </div>
 
             {/* Analyze Button */}
             <motion.button
               whileHover={{ scale: 1.01 }}
               whileTap={{ scale: 0.99 }}
               onClick={analyzeFile}
-              disabled={!uploadedFile && !textInput.trim() && !urlInput.trim()}
+              disabled={!uploadedFile && !textInput.trim()}
               className="w-full flex items-center justify-center gap-3 px-6 py-4 rounded-xl bg-[#00d4ff] text-[#000000] font-black text-lg disabled:opacity-30 disabled:cursor-not-allowed glow-cyan transition-all hover:bg-[#00d4ff]/90"
             >
               <Shield className="w-6 h-6" />

@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: truth-x-backend
+    env: python
+    buildCommand: pip install uv && uv pip install -r requirements.txt
+    startCommand: python -m uvicorn backend.api.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: ENABLE_GPU
+        value: "false"
+      - key: MISTRAL_API_KEY
+        sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false

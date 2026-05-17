@@ -2,15 +2,14 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Shield, Zap, History, Info, Menu, X, ChevronRight } from "lucide-react";
+import { Shield, Zap, History, Info, Menu, X, ChevronRight, AlertTriangle } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
-import InstallPrompt from "@/components/InstallPrompt";
-
 const navLinks = [
     { name: "Live Detection", href: "/live", icon: Zap, color: "#ff4444" },
+    { name: "Source Check", href: "/intel", icon: AlertTriangle, color: "#22d3ee" },
     { name: "History", href: "/history", icon: History, color: "#00d4ff" },
     { name: "Technology", href: "/about", icon: Info, color: "#a855f7" },
 ];
@@ -49,8 +48,6 @@ export default function Navbar() {
                 className={`fixed top-0 left-0 right-0 z-50 px-4 py-4 md:px-6 transition-transform duration-300 ${hidden ? "-translate-y-full" : "translate-y-0"}`}
             >
                 <div className="max-w-7xl mx-auto flex items-center justify-between p-4 rounded-2xl glass-panel relative overflow-hidden">
-                    {/* Animated Glow Line */}
-                    <div className="absolute top-0 left-0 w-full h-px bg-gradient-to-r from-transparent via-cyan-500/50 to-transparent" />
 
                     {/* Logo */}
                     <Link href="/" className="flex items-center gap-2 group relative z-10">
@@ -100,12 +97,21 @@ export default function Navbar() {
 
                     {/* Auth & Mobile Toggle */}
                     <div className="flex items-center gap-4">
-                        <InstallPrompt />
                         {user ? (
                             <div className="flex items-center gap-4">
-                                <div className="hidden sm:flex flex-col items-end">
-                                    <span className="text-xs text-slate-400 font-medium">Logged in as</span>
-                                    <span className="text-sm text-cyan-400 font-bold">{user.email.split('@')[0]}</span>
+                                <div className="flex items-center gap-3">
+                                    <div className="w-10 h-10 rounded-full bg-white/5 flex items-center justify-center overflow-hidden">
+                                        {user?.user_metadata?.avatar_url ? (
+                                            // eslint-disable-next-line @next/next/no-img-element
+                                            <img src={user.user_metadata.avatar_url} alt="avatar" className="w-full h-full object-cover" />
+                                        ) : (
+                                            <div className="w-full h-full flex items-center justify-center text-sm font-bold text-white/90 bg-cyan-500/10">{(user?.user_metadata?.full_name || user?.email || "?").split(" ").map(s => s[0]).slice(0,2).join("")}</div>
+                                        )}
+                                    </div>
+                                    <div className="hidden sm:flex flex-col items-start">
+                                        <span className="text-xs text-slate-400 font-medium">Logged in as</span>
+                                        <span className="text-sm text-cyan-400 font-bold">{user?.user_metadata?.full_name || (user?.email?.split('@')[0])}</span>
+                                    </div>
                                 </div>
                                 <button
                                     onClick={logout}

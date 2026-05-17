@@ -27,10 +27,10 @@ class FAISSSearch:
     def __init__(self) -> None:
         cfg = _load_config()
         retrieval_cfg = cfg.get("retrieval", {})
-
         self.articles_path = os.path.join(_PROJECT_ROOT, retrieval_cfg.get("articles_path", "data/articles.json"))
         self.embedder_model = retrieval_cfg.get("embedder_model", "sentence-transformers/all-MiniLM-L6-v2")
         self.top_k = retrieval_cfg.get("top_k", 5)
+        self._use_local_corpus = bool(retrieval_cfg.get("use_local_corpus", False))
 
         self.articles: List[Dict[str, Any]] = []
         self.embeddings: Optional[np.ndarray] = None
@@ -41,6 +41,9 @@ class FAISSSearch:
         self._build_index()
 
     def _load_articles(self) -> None:
+        if not self._use_local_corpus:
+            logger.info("Local corpus loading disabled by config (use_local_corpus=false)")
+            return
         if not os.path.isfile(self.articles_path):
             logger.warning("Articles file not found: %s", self.articles_path)
             return
@@ -51,8 +54,8 @@ class FAISSSearch:
     def _load_embedder(self) -> None:
         try:
             from sentence_transformers import SentenceTransformer
-            self.embedder = SentenceTransformer(self.embedder_model)
-            logger.info("Sentence embedder loaded: %s", self.embedder_model)
+            self.embedder = SentenceTransformer(self.embedder_model, device="cpu")
+            logger.info("Sentence embedder loaded: %s (forcing CPU)", self.embedder_model)
         except ImportError:
             logger.error("sentence-transformers not installed — FAISS search disabled")
         except Exception as e:

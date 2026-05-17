@@ -6,9 +6,11 @@ network graph scraping, and intensive background inference jobs.
 
 import os
 from celery import Celery
-from dotenv import load_dotenv
 
-load_dotenv()
+from backend.utils.env_loader import ensure_backend_environment_loaded, log_runtime_env_status
+
+ensure_backend_environment_loaded()
+log_runtime_env_status("celery_startup")
 
 # Use Redis if available, otherwise fallback to filesystem for Windows local testing
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")

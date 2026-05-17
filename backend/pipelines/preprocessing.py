@@ -247,8 +247,12 @@ def align_faces(frames: List[Image.Image]) -> List[Image.Image]:
             angle = np.degrees(np.arctan2(dy, dx))
 
             if abs(angle) > 0.5:  # Only rotate if meaningful
-                center = ((left_eye[0] + right_eye[0]) // 2, (left_eye[1] + right_eye[1]) // 2)
-                M = cv2.getRotationMatrix2D(center, angle, 1.0)
+                # Ensure OpenCV gets numeric center values (avoid numpy scalar type issues).
+                center = (
+                    float(left_eye[0] + right_eye[0]) / 2.0,
+                    float(left_eye[1] + right_eye[1]) / 2.0,
+                )
+                M = cv2.getRotationMatrix2D(center, float(angle), 1.0)
                 rotated = cv2.warpAffine(arr, M, (arr.shape[1], arr.shape[0]))
                 aligned.append(Image.fromarray(rotated))
                 continue

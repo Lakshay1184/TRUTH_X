@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useToast } from "@/context/ToastContext";
 import { Download } from "lucide-react";
 
 export default function InstallPrompt() {
@@ -37,6 +38,8 @@ export default function InstallPrompt() {
         };
     }, []);
 
+    const { showToast } = useToast();
+
     const handleInstallClick = async () => {
         if (!deferredPrompt) {
             // Check if secure context is the issue
@@ -44,24 +47,12 @@ export default function InstallPrompt() {
             const currentUrl = window.location.href;
 
             if (!isSecure) {
-                alert(
-                    `⚠️ Install Blocked by Browser\n\n` +
-                    `Reason: Not Secure (HTTP)\n\n` +
-                    `FIX:\n` +
-                    `1. Go to chrome://flags\n` +
-                    `2. Enable "Insecure origins treated as secure"\n` +
-                    `3. Add this URL: ${window.location.origin}\n` +
-                    `4. Restart Chrome.\n\n` +
-                    `After this, the button will work!`
-                );
+                showToast("Install blocked: site not served over HTTPS. See console for instructions.", "error");
+                console.info(`PWA install note: insecure context. Suggested steps:\n1. Go to chrome://flags\n2. Enable 'Insecure origins treated as secure'\n3. Add origin: ${window.location.origin}\n4. Restart browser.`);
                 return;
             }
 
-            alert(
-                "App is ready but browser blocked auto-install.\n\n" +
-                "• Tap ⋮ menu -> 'Install App'\n" +
-                "• Or 'Add to Home Screen'"
-            );
+            showToast("App install is available via browser menu: 'Install App' or 'Add to Home Screen'", "info");
             return;
         }
 

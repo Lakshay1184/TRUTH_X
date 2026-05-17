@@ -8,8 +8,8 @@ import numpy as np
 
 from backend.utils.logger import logger
 
-FAKE_LABELS = {"fake", "deepfake", "ai-generated", "ai", "machine", "spoof"}
-REAL_LABELS = {"real", "human-written", "human", "bonafide", "original"}
+FAKE_LABELS = {"fake", "deepfake", "ai-generated", "ai", "machine", "spoof", "manipulated"}
+REAL_LABELS = {"real", "human-written", "human", "bonafide", "original", "authentic"}
 
 
 def _to_fake_probability(result: Dict[str, Any]) -> Optional[float]:
@@ -29,6 +29,7 @@ def aggregate_results(
     video_result: Optional[Dict[str, Any]] = None,
     audio_result: Optional[Dict[str, Any]] = None,
     text_result: Optional[Dict[str, Any]] = None,
+    image_result: Optional[Dict[str, Any]] = None,
     articles: Optional[List[Dict[str, Any]]] = None,
     weights: Optional[Dict[str, float]] = None,
 ) -> Dict[str, Any]:
@@ -41,14 +42,15 @@ def aggregate_results(
         - Trust score integration
     """
     if weights is None:
-        weights = {"video": 0.45, "audio": 0.30, "text": 0.25}
+        weights = {"video": 0.40, "audio": 0.20, "text": 0.20, "image": 0.20}
 
     report: Dict[str, Any] = {
         "video": video_result,
         "audio": audio_result,
         "text": text_result,
+        "image": image_result,
         "related_articles": articles or [],
-        "combined_fake_probability": 0.5,
+        "combined_fake_probability": 0.0,
         "combined_confidence": 0.0,
         "overall_label": "uncertain",
     }
@@ -57,8 +59,15 @@ def aggregate_results(
     total_weight = 0.0
     confidence_sum = 0.0
 
-    for key, result in [("video", video_result), ("audio", audio_result), ("text", text_result)]:
-        if result is None:
+    modalities = [
+        ("video", video_result),
+        ("audio", audio_result),
+        ("text", text_result),
+        ("image", image_result)
+    ]
+
+    for key, result in modalities:
+        if result is None or result.get("label") == "inconclusive" or result.get("label") == "unknown":
             continue
 
         fake_prob = _to_fake_probability(result)
@@ -70,13 +79,13 @@ def aggregate_results(
         det_confidence = result.get("confidence", 0.5)
 
         # Confidence-weighted: scale the weight by detector confidence
+        # We increase the weight exponentially for high confidence
         effective_weight = w * (0.5 + det_confidence * 0.5)
 
         # Temporal consistency bonus for video
         if key == "video" and "temporal_consistency" in result:
             temporal = result["temporal_consistency"]
             consistency_score = temporal.get("score", 1.0)
-            # Boost weight if temporally consistent, reduce if inconsistent
             effective_weight *= (0.7 + 0.3 * consistency_score)
 
         logger.debug("%s: fake_prob=%.4f, base_weight=%.2f, effective_weight=%.4f",
@@ -92,9 +101,12 @@ def aggregate_results(
         report["combined_confidence"] = round(abs(combined_fake - 0.5) * 2, 4)
         report["overall_label"] = "fake" if combined_fake >= 0.5 else "real"
     else:
-        report["overall_label"] = "uncertain (incomplete)"
-        report["combined_fake_probability"] = 0.5
+        # Honest failure state: No data to analyze
+        report["overall_label"] = "insufficient_data"
+        report["combined_fake_probability"] = 0.0
         report["combined_confidence"] = 0.0
+        report["status"] = "failed"
+        logger.warning("Aggregation failed: No modality provided valid forensic signals.")
 
     logger.info("Aggregated: overall=%s, fake_prob=%.4f, confidence=%.4f",
                 report["overall_label"], report["combined_fake_probability"],
@@ -105,7 +117,9 @@ def aggregate_results(
 def compute_risk_score(
     metadata: dict,
     video_result: Optional[Dict[str, Any]] = None,
+    audio_result: Optional[Dict[str, Any]] = None,
     text_result: Optional[Dict[str, Any]] = None,
+    image_result: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Analyze metadata + ML results for suspicious indicators and compute authenticity score."""
     flags = []
@@ -143,7 +157,7 @@ def compute_risk_score(
         meta_penalty += 10
 
     # ── ML results ──
-    ml_score = None
+    ml_scores = []
 
     if video_result and video_result.get("label"):
         label = video_result["label"].lower()
@@ -151,7 +165,8 @@ def compute_risk_score(
         trust = video_result.get("trust_score", confidence)
 
         if label == "fake":
-            ml_score = int((1.0 - confidence) * 100)
+            v_score = int((1.0 - confidence) * 100)
+            ml_scores.append(v_score)
             ml_driven = True
             flags.append({
                 "label": "Deepfake Detected",
@@ -159,7 +174,25 @@ def compute_risk_score(
                 "severity": "critical" if confidence > 0.75 else "high",
             })
         elif label == "real" and confidence > 0.5:
-            ml_score = int(confidence * 100)
+            ml_scores.append(int(confidence * 100))
+            ml_driven = True
+
+    if audio_result and audio_result.get("label"):
+        label = audio_result["label"].lower()
+        confidence = audio_result.get("confidence", 0)
+        fake_prob = audio_result.get("fake_probability", 0)
+        
+        if label == "fake" or fake_prob > 0.5:
+            a_score = int((1.0 - fake_prob) * 100)
+            ml_scores.append(a_score)
+            ml_driven = True
+            flags.append({
+                "label": "Synthetic Voice",
+                "detail": f"Audio: {fake_prob:.0%} synthetic probability",
+                "severity": "critical" if fake_prob > 0.8 else "high",
+            })
+        elif label == "real" and confidence > 0.5:
+            ml_scores.append(int(confidence * 100))
             ml_driven = True
 
     if text_result and text_result.get("label"):
@@ -172,17 +205,41 @@ def compute_risk_score(
                 "detail": f"Text: {ai_prob:.0%} AI probability",
                 "severity": "critical" if ai_prob > 0.75 else "high",
             })
-            ml_score = min(ml_score, text_ml_score) if ml_score is not None else text_ml_score
+            ml_scores.append(text_ml_score)
+            ml_driven = True
+
+    if image_result and image_result.get("label"):
+        label = image_result["label"].lower()
+        fake_prob = image_result.get("fake_probability", 0)
+        if "ai" in label or fake_prob > 0.5:
+            i_score = int((1.0 - fake_prob) * 100)
+            flags.append({
+                "label": "Synthetic Image",
+                "detail": f"Image: {fake_prob:.0%} AI probability",
+                "severity": "critical" if fake_prob > 0.8 else "high",
+            })
+            ml_scores.append(i_score)
+            ml_driven = True
+        elif "authentic" in label and image_result.get("confidence", 0) > 0.5:
+            ml_scores.append(int(image_result.get("confidence", 0) * 100))
             ml_driven = True
 
     # ── Final score ──
-    if ml_driven and ml_score is not None:
+    if ml_driven and ml_scores:
+        # Use the most conservative (lowest) ML score
+        ml_score = min(ml_scores)
         score = max(0, ml_score - (meta_penalty // 2))
     else:
         score = max(0, 100 - meta_penalty)
 
     score = max(0, min(100, score))
-    risk_level = "low" if score >= 70 else "medium" if score >= 40 else "high"
+    
+    # Standardized Scale (Legacy Fallback)
+    if score <= 20: risk_level = "critical"
+    elif score <= 40: risk_level = "high"
+    elif score <= 60: risk_level = "medium"
+    elif score <= 80: risk_level = "low"
+    else: risk_level = "minimal"
 
     return {
         "authenticity_score": score,
