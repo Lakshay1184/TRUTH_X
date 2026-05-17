@@ -1,11 +1,11 @@
+from __future__ import annotations
+
 """
 Truth_X — FastAPI server main entrypoint.
 Modularized architecture.
 """
 
 print(">>> BACKEND STARTUP: main.py execution started")
-
-from __future__ import annotations
 
 import threading
 from contextlib import asynccontextmanager
