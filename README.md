@@ -11,6 +11,8 @@
 ---
 WORKING WEBSITE LINK : https://truth-x-a1wc.vercel.app/
 
+
+
 ## 🔍 1. Project Overview
 
 **Truth_X** is a production-grade, multi-modal intelligence platform designed to combat the rising tide of digital deception. It provides an end-to-end forensic pipeline for identifying **deepfakes**, **AI-generated text**, and **coordinated misinformation** across complex media landscapes.
