@@ -185,8 +185,8 @@ Truth_X requires several keys to enable full intelligence features. Create a `.e
 Truth_X is designed for a hybrid cloud deployment to balance cost and performance.
 
 *   **Frontend:** [Vercel](https://vercel.com) (Edge-optimized for Next.js)
-*   **Backend API:** [Render](https://render.com) or [Railway](https://railway.app) (Scalable FastAPI instances)
-*   **GPU Workers:** [RunPod](https://runpod.io) or [Modal](https://modal.com) (On-demand serverless GPUs for VideoMAE/Whisper)
+*   **Backend API:**  [Railway](https://railway.app) (Scalable FastAPI instances)
+*   **GPU Workers:** [Modal](https://modal.com) (On-demand serverless GPUs for VideoMAE/Whisper)
 *   **Database & Auth:** [Supabase](https://supabase.com) (Managed Postgres + Auth)
 *   **Vector Store:** [FAISS](https://github.com/facebookresearch/faiss) (Local or hosted on specialized vector pods)
 *   **Storage:** Cloudinary or AWS S3 (Media persistence, if enabled)
