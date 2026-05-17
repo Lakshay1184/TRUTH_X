@@ -15,9 +15,10 @@ WORKING WEBSITE LINK : https://truth-x-a1wc.vercel.app/
 
 ## 🔍 1. Project Overview
 
-**Truth_X** is a production-grade, multi-modal intelligence platform designed to combat the rising tide of digital deception. It provides an end-to-end forensic pipeline for identifying **deepfakes**, **AI-generated text**, and **coordinated misinformation** across complex media landscapes.
+**Truth_X** is a production-grade, multi-modal intelligence and forensic analysis platform engineered to combat the growing threat of digital deception. The system delivers an end-to-end verification pipeline capable of detecting **deepfakes**, **AI-generated content**, and **coordinated misinformation campaigns** across diverse media ecosystems.
 
-The platform serves as a high-fidelity workbench for journalists, OSINT researchers, and forensic analysts, moving beyond simple classification to provide **grounded source verification**, **multimedia forensics**, and **scam intelligence**. By fusing neural signals with real-time evidence retrieval, Truth_X delivers defensible verdicts in an era of synthetic reality.
+Designed for journalists, OSINT investigators, cybersecurity teams, and forensic analysts, Truth_X goes beyond traditional classification systems by providing **source-grounded verification**, **advanced multimedia forensics**, and **scam intelligence analysis** within a unified investigative environment. By combining neural detection models with real-time evidence retrieval and cross-source validation, the platform produces transparent, defensible, and evidence-backed verdicts in an increasingly synthetic information landscape.
+
 
 ---
 
@@ -220,13 +221,3 @@ Truth_X is designed for a hybrid cloud deployment to balance cost and performanc
 
 ---
 
-## 🤝 Contributing
-
-Contributions are welcome! Please submit a PR or open an issue to discuss proposed changes.
-
-## 📄 License
-
-MIT License - Copyright (c) 2026 Truth_X Team.
-
----
-<p align="center">Built for a more transparent digital world.</p>
