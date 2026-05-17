@@ -9,6 +9,7 @@
 [![Supabase](https://img.shields.io/badge/Supabase-Backend-3ECF8E?logo=supabase&logoColor=white)](https://supabase.com/)
 
 ---
+WORKING WEBSITE LINK : https://truth-x-a1wc.vercel.app/
 
 ## 🔍 1. Project Overview
 
