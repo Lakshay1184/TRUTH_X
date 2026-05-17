@@ -411,8 +411,14 @@ class IntelEngine:
             _update_status("Processing local video forensics...")
             transcript = media_pipeline.ingest_file(file_path, _update_status)
             if transcript:
-                content = transcript
-                audit.log_event("media_ingestion", "Local media transcribed", transcript_chars=len(transcript))
+                if "transcript unavailable" in transcript.lower():
+                    logger.info("Transcript unavailable (Lightweight Mode), using metadata context if possible")
+                    is_fallback = True
+                    # If it's a file, we don't have metadata context unless we extract it
+                    content = "Local video file (Transcript unavailable in cloud deployment)"
+                else:
+                    content = transcript
+                    audit.log_event("media_ingestion", "Local media transcribed", transcript_chars=len(transcript))
             else:
                 logger.error("Local media ingestion failed")
                 raise ValueError("Could not extract transcript from the uploaded video file.")

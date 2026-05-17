@@ -35,10 +35,26 @@ class FAISSSearch:
         self.articles: List[Dict[str, Any]] = []
         self.embeddings: Optional[np.ndarray] = None
         self.embedder = None
+        self.index_built = False
 
         self._load_articles()
-        self._load_embedder()
-        self._build_index()
+        # Do NOT load embedder or build index in __init__ for memory efficiency
+        # self._load_embedder()
+        # self._build_index()
+
+    def _ensure_index(self) -> bool:
+        """Ensure embedder is loaded and index is built."""
+        if self.index_built:
+            return True
+            
+        if self.embedder is None:
+            self._load_embedder()
+            
+        if self.embedder is not None and not self.index_built:
+            self._build_index()
+            self.index_built = True
+            
+        return self.index_built
 
     def _load_articles(self) -> None:
         if not self._use_local_corpus:
@@ -83,6 +99,9 @@ class FAISSSearch:
         if k is None:
             k = self.top_k
 
+        if not self._ensure_index():
+            return []
+            
         if self.embedder is None or self.embeddings is None or not self.articles:
             logger.warning("FAISS search unavailable (embedder=%s, articles=%d)",
                            self.embedder is not None, len(self.articles))

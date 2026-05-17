@@ -13,7 +13,12 @@ import gc
 import os
 from typing import Any, Dict, List
 
-import librosa
+try:
+    import librosa
+    LIBROSA_AVAILABLE = True
+except ImportError:
+    LIBROSA_AVAILABLE = False
+
 import numpy as np
 import torch
 import yaml
@@ -55,22 +60,38 @@ class AudioDeepfakeDetector(BaseDetector):
         self.segment_duration: float = audio_cfg.get("segment_duration", 3.0)
         self.max_duration: int = audio_cfg.get("max_duration", 30)
 
-        logger.info("Loading audio model '%s' on %s", self.model_name, self.device)
-        try:
-            self.feature_extractor = AutoFeatureExtractor.from_pretrained(self.model_name)
-            self.model = AutoModelForAudioClassification.from_pretrained(self.model_name, low_cpu_mem_usage=False)
-            self.model.to(self.device)
-            self.model.eval()
-            logger.info("Audio model loaded successfully ✓")
-        except Exception as e:
-            logger.error("Failed to load audio model: %s", e)
-            self.model = None
+        self.feature_extractor = None
+        self.model = None
+        
+        # LIGHTWEIGHT MODE: Check if we should even load this
+        self.enabled = os.environ.get("AUDIO_DETECTION_ENABLED", "true").lower() == "true"
+        logger.info("AudioDeepfakeDetector initialized (Enabled=%s)", self.enabled)
+
+    def _ensure_model(self) -> bool:
+        """Lazy-load the audio model if enabled."""
+        if not self.enabled:
+            return False
+            
+        if self.model is None:
+            logger.info("Loading audio model '%s' on %s", self.model_name, self.device)
+            try:
+                self.feature_extractor = AutoFeatureExtractor.from_pretrained(self.model_name)
+                self.model = AutoModelForAudioClassification.from_pretrained(self.model_name, low_cpu_mem_usage=True)
+                self.model.to(self.device)
+                self.model.eval()
+                logger.info("Audio model loaded successfully ✓")
+                return True
+            except Exception as e:
+                logger.error("Failed to load audio model: %s", e)
+                self.model = None
+                return False
+        return True
 
     @torch.no_grad()
     def predict(self, audio_path: str) -> Dict[str, Any]:
         """Analyze an audio file with segment-level analysis."""
-        if self.model is None:
-            return {"error": "Model not loaded"}
+        if not self._ensure_model():
+            return {"error": "Audio detection disabled or model failed to load"}
 
         if not os.path.exists(audio_path):
             logger.error("Audio file not found: %s", audio_path)

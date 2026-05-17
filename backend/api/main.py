@@ -23,18 +23,12 @@ async def lifespan(application: FastAPI):
     # Pre-initialize pipeline (models lazy-load on first request)
     shared._pipeline = DeepfakeDetectionPipeline()
     
-    # Pre-initialize Intel Adapter and its models in background thread
-    def _init_intel():
-        try:
-            from backend.intel.truthguard_adapter import get_adapter
-            get_adapter()
-            logger.info("Intel system pre-initialized in background")
-        except Exception as e:
-            logger.error("Failed to pre-initialize Intel system: %s", e)
-
-    threading.Thread(target=_init_intel, daemon=True).start()
+    # HEAVY SYSTEM OPTIMIZATION:
+    # Do NOT pre-initialize Intel system or models in background threads on startup.
+    # This causes RAM spikes that crash low-memory cloud instances (Render Free Tier).
+    # All components will now lazy-load on demand.
     
-    logger.info("API initialized (models will lazy-load in background) ✓")
+    logger.info("API initialized (Lightweight startup mode active) ✓")
     yield
     shared._pipeline = None
 

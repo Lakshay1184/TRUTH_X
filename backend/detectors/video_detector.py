@@ -124,28 +124,44 @@ class VideoDeepfakeDetector(BaseDetector):
         self.batch_size = 1  # 1 clip (16 frames) at a time
         self.fallback_active = False
         self.init_error = None
+        
+        self.processor = None
+        self.model = None
+        self.anomaly_head = None
 
-        logger.info("Initializing VideoMAE Temporal Backbone: %s", self.model_name)
-        try:
-            t0 = time.perf_counter()
-            self.processor = VideoMAEImageProcessor.from_pretrained(self.model_name)
-            self.model = VideoMAEModel.from_pretrained(self.model_name, low_cpu_mem_usage=False)
-            self.model.to(self.device)
-            self.model.eval()
+        self.enabled = os.environ.get("VIDEO_DETECTION_ENABLED", "true").lower() == "true"
+        logger.info("VideoDeepfakeDetector initialized (Enabled=%s)", self.enabled)
+
+    def _ensure_model(self) -> bool:
+        """Lazy-load the video model if enabled."""
+        if not self.enabled:
+            return False
             
-            self.anomaly_head = TemporalAnomalyClassifier(self.model.config.hidden_size).to(self.device)
-            self.anomaly_head.eval()
-            
-            logger.info("VideoMAE loaded successfully (%.2fs) ✓", time.perf_counter() - t0)
-        except Exception as e:
-            self.fallback_active = True
-            self.init_error = str(e)
-            logger.error("VideoMAE LOAD FAILURE: %s. Reverting to fallback scoring.", e)
+        if self.model is None:
+            logger.info("Initializing VideoMAE Temporal Backbone: %s", self.model_name)
+            try:
+                t0 = time.perf_counter()
+                self.processor = VideoMAEImageProcessor.from_pretrained(self.model_name)
+                self.model = VideoMAEModel.from_pretrained(self.model_name, low_cpu_mem_usage=True)
+                self.model.to(self.device)
+                self.model.eval()
+                
+                self.anomaly_head = TemporalAnomalyClassifier(self.model.config.hidden_size).to(self.device)
+                self.anomaly_head.eval()
+                
+                logger.info("VideoMAE loaded successfully (%.2fs) ✓", time.perf_counter() - t0)
+                return True
+            except Exception as e:
+                self.fallback_active = True
+                self.init_error = str(e)
+                logger.error("VideoMAE LOAD FAILURE: %s. Reverting to fallback scoring.", e)
+                return False
+        return True
 
     @torch.no_grad()
     def _run_inference(self, clip_frames: List[Image.Image]) -> Dict[str, Any]:
         """Executes VideoMAE temporal transformer inference on a single 16-frame clip."""
-        if self.fallback_active:
+        if not self._ensure_model() or self.fallback_active:
             return {"error": "VideoMAE Offline", "score": 0.5}
 
         t_start = time.perf_counter()

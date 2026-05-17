@@ -82,19 +82,33 @@ class TextAIDetector(BaseDetector):
         self.tokenizer = None
         self.model = None
 
-        try:
-            logger.info("Loading robust text detector '%s' on %s", self.model_name, self.device)
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            self.model = AutoModelForSequenceClassification.from_pretrained(self.model_name)
-            self.model.to(self.device)
-            self.model.eval()
-            logger.info("Text model loaded successfully ✓")
-        except Exception as e:
-            logger.error("CRITICAL: Failed to load text model: %s", e)
-            self.model = None
+        self.enabled = os.environ.get("TEXT_DETECTION_ENABLED", "true").lower() == "true"
+        logger.info("TextAIDetector initialized (Enabled=%s)", self.enabled)
+
+    def _ensure_model(self) -> bool:
+        """Lazy-load the text model if enabled."""
+        if not self.enabled:
+            return False
+            
+        if self.model is None:
+            try:
+                logger.info("Loading robust text detector '%s' on %s", self.model_name, self.device)
+                self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+                self.model = AutoModelForSequenceClassification.from_pretrained(self.model_name, low_cpu_mem_usage=True)
+                self.model.to(self.device)
+                self.model.eval()
+                logger.info("Text model loaded successfully ✓")
+                return True
+            except Exception as e:
+                logger.error("CRITICAL: Failed to load text model: %s", e)
+                self.model = None
+                return False
+        return True
 
     def _run_primary_inference(self, text: str) -> float:
         """Run the primary ChatGPT-RoBERTa classifier with strict length limits."""
+        if not self._ensure_model():
+             raise RuntimeError("Text model unavailable")
         # RoBERTa max_position_embeddings is typically 514 (512 + 2)
         # We must truncate strictly to 512 to avoid "tensor size mismatch" errors
         safe_max_length = 512

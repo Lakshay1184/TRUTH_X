@@ -36,6 +36,16 @@ def ensure_backend_environment_loaded() -> str:
                 os.environ["MISTRAL_REASONING_ENABLED"] = "true"
                 logger.info("Mistral reasoning enabled automatically (MISTRAL_API_KEY found)")
         
+        # ─── Lightweight Mode Defaults ──────────────────────────────────────
+        if "TRANSCRIPTION_ENABLED" not in os.environ:
+            # Default to false to save memory on cloud deployments
+            os.environ["TRANSCRIPTION_ENABLED"] = "false"
+            logger.info("Transcription disabled by default (Lightweight Mode)")
+
+        if "AUDIO_DETECTION_ENABLED" not in os.environ:
+             os.environ["AUDIO_DETECTION_ENABLED"] = "false"
+             logger.info("Audio detection disabled by default (Lightweight Mode)")
+
         if "TEXT_DETECTOR_BACKEND" not in os.environ:
             os.environ["TEXT_DETECTOR_BACKEND"] = "local"
             

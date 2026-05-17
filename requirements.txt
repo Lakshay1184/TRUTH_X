@@ -1,60 +1,48 @@
 # ─────────────────────────────────────────────────────────
-# truth.x — Python Dependencies
-# Production-grade multimodal AI detection platform
+# truth.x — Python Dependencies (LIGHTWEIGHT CLOUD MODE)
+# Optimized for Render Free Tier (512MB RAM)
 # ─────────────────────────────────────────────────────────
 
-# PyTorch (CUDA 11.8)
-torch
-torchvision
-torchaudio
---extra-index-url https://download.pytorch.org/whl/cu118
-
-# Hugging Face & Transformers
-transformers
-accelerate
-sentence-transformers
-tokenizers
-
-# LangChain / LangGraph orchestration
-langchain
-langchain-core
-langchain-community
-langchain-text-splitters
-langgraph
-
-# Computer Vision
-opencv-python
-Pillow
-
-# Web Framework
+# Core Runtime
+torch --index-url https://download.pytorch.org/whl/cpu
+numpy
+python-dotenv
+pyyaml
+httpx
 fastapi
 uvicorn[standard]
 python-multipart
 pydantic
 celery
 
-# Audio Processing
-librosa
-soundfile
+# Vision (Necessary for Image/Video)
+transformers
+accelerate
+opencv-python-headless
+Pillow
 
-# Utilities
-numpy
-python-dotenv
-pyyaml
-httpx
-
-# Document Parsing
-PyPDF2
-python-docx
-
-# FFmpeg (fallback binary)
-imageio-ffmpeg
-
-# Web scraping
+# NLP & RAG
+langchain
+langchain-core
+langchain-community
+langchain-text-splitters
+langgraph
+sentence-transformers
+tokenizers
 beautifulsoup4
 
-# Face Landmark Detection (for video deepfake analysis)
-mediapipe
+# Utilities
+PyPDF2
+python-docx
+imageio-ffmpeg
+
+# ─── Temporarily Disabled for Memory ────────────────────
+# torchaudio
+# torchvision
+# mediapipe
+# openai-whisper
+# librosa
+# soundfile
 
 # Testing
 pytest

@@ -64,6 +64,12 @@ class MediaPipeline:
                 return None
 
             # 4. Transcribe
+            if not self.transcriber.enabled:
+                logger.info(f"Transcription disabled (Lightweight mode), returning metadata-only result for {url}")
+                if status_callback:
+                    status_callback("Transcription skipped: Lightweight deployment mode active")
+                return "NOTE: Full transcript unavailable in lightweight cloud mode. Analysis based on metadata and technical signals."
+
             if status_callback:
                 status_callback("Generating AI transcript (Whisper)...")
             
@@ -109,6 +115,12 @@ class MediaPipeline:
                 temp_files.extend(chunks)
 
             # 3. Transcribe
+            if not self.transcriber.enabled:
+                logger.info(f"Transcription disabled (Lightweight mode) for local file: {file_path}")
+                if status_callback:
+                    status_callback("Transcription skipped: Lightweight deployment mode active")
+                return "NOTE: Full transcript unavailable in lightweight cloud mode."
+
             if status_callback:
                 status_callback("Generating AI transcript (Whisper)...")
             transcript = self.transcriber.transcribe_chunks(chunks, status_callback)
