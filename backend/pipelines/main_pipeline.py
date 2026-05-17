@@ -779,6 +779,9 @@ class DeepfakeDetectionPipeline:
 # ─── Utilities ───────────────────────────────────────────────────────────
 
 def _has_torch_cuda() -> bool:
+    import os
+    if os.environ.get("ENABLE_GPU", "false").lower() != "true":
+        return False
     try:
         import torch
         return torch.cuda.is_available()

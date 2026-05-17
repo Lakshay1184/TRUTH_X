@@ -1,11 +1,13 @@
 # ─────────────────────────────────────────────────────────
-# truth.x — Python Dependencies (LIGHTWEIGHT CLOUD MODE)
-# Optimized for Render Free Tier (512MB RAM)
+# truth.x — Railway Optimized CPU Build
+# Stable AI/ML Deployment Configuration
 # ─────────────────────────────────────────────────────────
 
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 # Core Runtime
-torch --index-url https://download.pytorch.org/whl/cpu
-numpy
+torch==2.7.1+cpu
+numpy<2.0
 python-dotenv
 pyyaml
 httpx
@@ -15,8 +17,8 @@ python-multipart
 pydantic
 celery
 
-# Vision (Necessary for Image/Video)
-transformers
+# Vision / AI
+transformers==4.52.4
 accelerate
 opencv-python-headless
 Pillow
@@ -35,14 +37,6 @@ beautifulsoup4
 PyPDF2
 python-docx
 imageio-ffmpeg
-
-# ─── Temporarily Disabled for Memory ────────────────────
-# torchaudio
-# torchvision
-# mediapipe
-# openai-whisper
-# librosa
-# soundfile
 
 # Testing
 pytest

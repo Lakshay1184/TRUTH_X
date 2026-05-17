@@ -22,8 +22,10 @@ class BaseDetector(ABC):
     modality: str = "unknown"  # Override in subclasses
 
     def __init__(self) -> None:
+        import os
+        enable_gpu = os.environ.get("ENABLE_GPU", "false").lower() == "true"
         self.device = torch.device(
-            "cuda" if torch.cuda.is_available() else "cpu"
+            "cuda" if enable_gpu and torch.cuda.is_available() else "cpu"
         )
         self._load_time: float = 0.0
 
