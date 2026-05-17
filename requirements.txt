@@ -22,6 +22,7 @@ transformers==4.52.4
 accelerate
 opencv-python-headless
 Pillow
+pydub
 
 # NLP & RAG
 langchain
