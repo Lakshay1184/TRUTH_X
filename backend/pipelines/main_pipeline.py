@@ -125,6 +125,27 @@ class DeepfakeDetectionPipeline:
             logger.error("Failed to load model '%s': %s", model_name, e)
             self.models[model_name] = None
 
+    def warmup_models(self, model_names: List[str]) -> None:
+        """Pre-load a list of models to avoid request-time latency."""
+        for name in model_names:
+            if name in self.models and self.models[name] is not None:
+                logger.info("Model '%s' is already warm.", name)
+                continue
+            
+            logger.info("Warming up model: %s...", name)
+            try:
+                self.load_model(name)
+                # If it's a detector with an _ensure_model method, call it
+                model = self.models.get(name)
+                if model and hasattr(model, "_ensure_model"):
+                    model._ensure_model()
+                elif model and hasattr(model, "_ensure_models"): # Image ensemble uses plural
+                    model._ensure_models()
+                
+                logger.info("Model '%s' is now warm and ready ✓", name)
+            except Exception as e:
+                logger.error("Failed to warm up model '%s': %s", name, e)
+
     # ── Lazy component loading ───────────────────────────────────────────
 
     @property

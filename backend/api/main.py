@@ -21,7 +21,21 @@ from fastapi.middleware.cors import CORSMiddleware
 # CORE IMPORTS COMPLETE
 print(">>> BACKEND STARTUP: FastAPI and Core imports complete")
 
+import asyncio
 from . import shared
+
+async def warmup_task():
+    """Background task to warm up stable detectors after startup."""
+    # Wait a few seconds to ensure uvicorn has bound the port and is serving requests
+    await asyncio.sleep(5)
+    print(">>> BACKGROUND WARMUP: Starting stable detector preloading...")
+    try:
+        pipeline = shared.get_pipeline()
+        # Preload ONLY lightweight/stable detectors to stay within memory limits
+        pipeline.warmup_models(["image", "text"])
+        print(">>> BACKGROUND WARMUP: Image and Text detectors are now warm ✓")
+    except Exception as e:
+        print(f">>> BACKGROUND WARMUP ERROR: {e}")
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
@@ -33,7 +47,11 @@ async def lifespan(application: FastAPI):
     except Exception as e:
         print(f">>> LIFESPAN ERROR during env load: {e}")
 
-    print(">>> LIFESPAN COMPLETE: API reached ready state ✓")
+    # Start background warmup WITHOUT blocking the lifespan yield
+    # This allows uvicorn to bind the port IMMEDIATELY
+    asyncio.create_task(warmup_task())
+
+    print(">>> LIFESPAN COMPLETE: API reached ready state ✓ (Warmup running in background)")
     yield
     print(">>> LIFESPAN SHUTDOWN: Cleaning up...")
 
