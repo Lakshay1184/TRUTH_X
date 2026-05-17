@@ -33,8 +33,7 @@ async def analyze(
     if user_id:
         logger.info("Analysis started for user: %s", user_id)
 
-    if not shared._pipeline:
-        raise HTTPException(500, "Pipeline not initialized.")
+    pipeline = shared.get_pipeline()
 
     supplied_files = {
         "video": video,
@@ -171,8 +170,7 @@ def _run_analysis_job(
     shared._job_manager.update_progress(job_id, 5, "processing")
     
     try:
-        if not shared._pipeline:
-            raise RuntimeError("Pipeline not initialized.")
+        pipeline = shared.get_pipeline()
 
         def _progress_from_status(msg: str) -> int:
             text = msg.lower()
@@ -183,7 +181,7 @@ def _run_analysis_job(
         def _update_status(msg: str) -> None:
             shared._job_manager.update_progress(job_id, _progress_from_status(msg), msg)
 
-        report = shared._pipeline.process(
+        report = pipeline.process(
             modality=modality,
             video_path=video_path,
             audio_path=audio_path,

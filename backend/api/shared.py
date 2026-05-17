@@ -11,13 +11,25 @@ from typing import Optional, Literal
 from backend.utils.logger import logger
 from backend.utils.env_loader import ensure_backend_environment_loaded, log_runtime_env_status
 from backend.workers.job_manager import JobManager
-from backend.pipelines.main_pipeline import DeepfakeDetectionPipeline
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from backend.pipelines.main_pipeline import DeepfakeDetectionPipeline
 
 AnalysisModality = Literal["text", "image", "audio", "video"]
 
 # Global State
-_pipeline: Optional[DeepfakeDetectionPipeline] = None
+_pipeline: Optional['DeepfakeDetectionPipeline'] = None
 _job_manager = JobManager()
+
+def get_pipeline() -> 'DeepfakeDetectionPipeline':
+    """Lazy-load the main pipeline."""
+    global _pipeline
+    if _pipeline is None:
+        from backend.pipelines.main_pipeline import DeepfakeDetectionPipeline
+        logger.info("Initializing DeepfakeDetectionPipeline (Lazy Load)...")
+        _pipeline = DeepfakeDetectionPipeline()
+    return _pipeline
 
 async def _log_to_supabase(table: str, data: dict) -> None:
     """
