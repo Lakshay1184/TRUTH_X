@@ -49,8 +49,10 @@ data/samples/
 data/downloads/
 data/uploads/
 data/temp/
-data/faiss/index.faiss
-data/faiss_metadata.pkl
+data/faiss/
+*.faiss
+*.pkl
+*.npy
 data/embeddings.npy
 celery_broker/out/
 celery_broker/processed/
