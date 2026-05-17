@@ -117,6 +117,13 @@ except Exception as e:
     traceback.print_exc()
 
 # ROUTES REGISTERED
-print(">>> BACKEND STARTUP: Routers registered. Application ready for Uvicorn.")
+print(">>> BACKEND STARTUP: Routers registered. Auditing active endpoints...")
+for route in app.routes:
+    methods = getattr(route, "methods", None)
+    path = getattr(route, "path", None)
+    if path:
+        print(f"    ‣ [ROUTE] {list(methods) if methods else 'N/A'} {path}")
+
 print(f">>> BACKEND STARTUP: Total startup sequence duration: {time.time() - start_time:.4f}s")
+print(">>> BACKEND STARTUP: Application ready for Uvicorn.")
 print(">>> BACKEND STARTUP: Uvicorn should now bind the port and start listening...")

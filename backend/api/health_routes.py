@@ -2,7 +2,7 @@
 Health check routes for Truth_X.
 """
 
-from typing import Dict
+from typing import Dict, Any
 from fastapi import APIRouter
 from fastapi.responses import FileResponse
 import os
@@ -11,12 +11,11 @@ router = APIRouter(tags=["health"])
 
 @router.get("/health")
 async def health() -> Dict[str, Any]:
-    import os
     return {
         "status": "ok",
+        "deployment": "railway" if "RAILWAY_STATIC_URL" in os.environ else "local",
         "version": "2.0.0",
-        "port": os.environ.get("PORT", "10000"),
-        "deployment": "render" if "RENDER" in os.environ else "local"
+        "port": os.environ.get("PORT", "10000")
     }
 
 @router.get("/favicon.ico", include_in_schema=False)
